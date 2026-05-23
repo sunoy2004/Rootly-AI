@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+aioredis
+httpx
+asyncpg
+python-dotenv
+pydantic

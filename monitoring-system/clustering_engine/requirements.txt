@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+elasticsearch[async]
+sentence-transformers
+faiss-cpu
+numpy
+asyncpg
+aioredis
+apscheduler
+python-dotenv
+pydantic

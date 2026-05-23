@@ -1,0 +1,76 @@
+rules:
+  - name: db_saturation
+    conditions:
+      - field: db_errors
+        operator: gt
+        threshold: 0.5
+      - field: p95_latency_ms
+        operator: gt
+        threshold: 2000
+    logic: AND
+    diagnosis: >
+      Database connection pool likely exhausted.
+      Both DB error rate and p95 latency elevated
+      simultaneously indicating DB saturation.
+    recommendation: >
+      1. Check DB server CPU and memory.
+      2. Inspect connection count vs pool max.
+      3. Review slow query log.
+      4. Increase pool size if DB resources allow.
+    confidence: 0.90
+    severity: CRITICAL
+
+  - name: cascade_failure
+    conditions:
+      - service: user-service
+        field: error_rate
+        operator: gt
+        threshold: 0.3
+      - service: order-service
+        field: error_rate
+        operator: gt
+        threshold: 0.2
+    logic: CROSS_SERVICE
+    diagnosis: >
+      Cascading failure. User Service errors are
+      propagating to Order Service. Root cause is
+      in User Service.
+    recommendation: >
+      1. Focus on user-service not order-service.
+      2. Check user-service DB circuit breaker state.
+      3. Consider fallback routing for orders.
+    confidence: 0.85
+    severity: CRITICAL
+
+  - name: circuit_breaker_open
+    conditions:
+      - field: status_code
+        operator: eq
+        threshold: 503
+    logic: SINGLE
+    diagnosis: >
+      Circuit breaker tripped. Underlying resource
+      failing repeatedly beyond threshold.
+    recommendation: >
+      1. Check /health endpoint to identify which
+      circuit opened.
+      2. Inspect the downstream dependency.
+      3. Monitor automatic recovery after timeout.
+    confidence: 0.95
+    severity: WARNING
+
+  - name: payment_gateway_degraded
+    conditions:
+      - field: gateway_timeouts
+        operator: gt
+        threshold: 0.3
+    logic: SINGLE
+    diagnosis: >
+      Payment gateway timeout rate exceeds threshold.
+      Likely external vendor degradation.
+    recommendation: >
+      1. Check payment gateway status page.
+      2. Review gateway_response_time histogram.
+      3. Consider queuing payments for retry.
+    confidence: 0.80
+    severity: WARNING

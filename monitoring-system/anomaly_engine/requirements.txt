@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+httpx
+asyncpg
+aioredis
+apscheduler
+scikit-learn
+numpy
+python-dotenv
+pydantic

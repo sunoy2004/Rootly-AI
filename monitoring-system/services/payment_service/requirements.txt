@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+httpx
+prometheus-fastapi-instrumentator
+prometheus_client
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-grpc
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-httpx
+python-json-logger
+python-dotenv
+pydantic

@@ -1,0 +1,185 @@
+version: "3.9"
+
+networks:
+  monitoring-net:
+    driver: bridge
+
+volumes:
+  es-data:
+  pg-data:
+  redis-data:
+  chroma-data:
+  grafana-data:
+  logs-volume:
+  flb-data:
+
+services:
+  elasticsearch:
+    image: elasticsearch:8.13.0
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - es-data:/usr/share/elasticsearch/data
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: monitoring
+      POSTGRES_USER: monitor
+      POSTGRES_PASSWORD: monitor123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monitor -d monitoring"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - monitoring-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8005:8000"
+    volumes:
+      - chroma-data:/data
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/data
+    networks:
+      - monitoring-net
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./collector/prometheus.yml:/etc/prometheus/prometheus.yml
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+    networks:
+      - monitoring-net
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./collector/grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+      - elasticsearch
+    networks:
+      - monitoring-net
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    networks:
+      - monitoring-net
+
+  fluent-bit:
+    image: fluent/fluent-bit:latest
+    volumes:
+      - ./collector/fluent_bit:/fluent-bit/etc
+      - logs-volume:/logs
+      - flb-data:/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  user-service:
+    build: ./services/user_service
+    ports:
+      - "8001:8001"
+    env_file: .env
+    volumes:
+      - logs-volume:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  order-service:
+    build: ./services/order_service
+    ports:
+      - "8002:8002"
+    env_file: .env
+    volumes:
+      - logs-volume:/logs
+    depends_on:
+      - user-service
+    networks:
+      - monitoring-net
+
+  payment-service:
+    build: ./services/payment_service
+    ports:
+      - "8003:8003"
+    env_file: .env
+    volumes:
+      - logs-volume:/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - monitoring-net
+
+  es-init:
+    image: python:3.11-slim
+    volumes:
+      - ./init_scripts:/init_scripts
+    command: >
+      sh -c "pip install elasticsearch asyncpg psycopg2-binary -q &&
+      python /init_scripts/create_es_template.py &&
+      python /init_scripts/create_pg_tables.py"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - monitoring-net
