@@ -2,8 +2,8 @@ import os
 
 
 def get_llm(provider: str = None, model: str = None):
-    provider = provider or os.getenv("LLM_PROVIDER", "openai")
-    model = model or os.getenv("LLM_MODEL", "gpt-4o")
+    provider = provider or os.getenv("LLM_PROVIDER", "groq")
+    model = model or os.getenv("LLM_MODEL", "groq-2o")
 
     if provider == "openai":
         from langchain_openai import ChatOpenAI
@@ -30,6 +30,15 @@ def get_llm(provider: str = None, model: str = None):
             model=model,
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             temperature=0,
+        )
+
+    elif provider == "groq":
+        from langchain_groq import GroqAI
+
+        return GroqAI(
+            model=model,
+            temperature=0,
+            api_key=os.getenv("GROQ_API_KEY"),
         )
 
     else:
