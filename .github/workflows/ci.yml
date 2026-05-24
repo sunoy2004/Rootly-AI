@@ -1,0 +1,48 @@
+name: Continuous Integration
+
+on:
+  push:
+    branches:
+      - main
+      - development
+  pull_request:
+    branches:
+      - main
+      - development
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Verify Dashboard Build
+        run: |
+          cd monitoring-system/dashboard
+          npm install
+          npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python syntax checkers
+        run: pip install flake8
+
+      - name: Verify Python Syntax
+        run: |
+          # Verify syntax of all python scripts, ignoring environment folder
+          flake8 monitoring-system/ --count --select=E9,F63,F7,F82 --show-source --statistics --exclude=.venv
+
+      - name: Verify Docker Compose Configuration
+        run: |
+          cd monitoring-system
+          docker compose config

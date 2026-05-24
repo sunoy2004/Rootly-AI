@@ -1,6 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 import ServiceHealthGrid from '../components/ServiceHealthGrid';
 import MetricsPanel from '../components/MetricsPanel';
 import IncidentList from '../components/IncidentList';
@@ -29,13 +27,6 @@ function LiveClock() {
 }
 
 export default function Dashboard() {
-  const { logout } = useAuth();
-  const navigate = useNavigate();
-
-  function handleLogout() {
-    logout();
-    navigate('/login');
-  }
 
   return (
     <div
@@ -68,20 +59,6 @@ export default function Dashboard() {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
           <LiveClock />
-          <button
-            onClick={handleLogout}
-            style={{
-              backgroundColor: 'transparent',
-              color: '#8b8fa8',
-              border: '1px solid #2a2d3a',
-              borderRadius: 6,
-              padding: '8px 16px',
-              fontSize: 13,
-              cursor: 'pointer',
-            }}
-          >
-            Logout
-          </button>
         </div>
       </header>
 
