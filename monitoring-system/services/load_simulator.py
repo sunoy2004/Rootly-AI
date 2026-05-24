@@ -1,13 +1,15 @@
 import asyncio
+import os
 import random
 import time
 from uuid import uuid4
 
 import httpx
 
-USER_BASE = "http://user-service:8001"
-ORDER_BASE = "http://order-service:8002"
-PAYMENT_BASE = "http://payment-service:8003"
+# Use localhost when running on host; Docker service names when inside compose network
+USER_BASE = os.getenv("USER_SERVICE_URL", "http://localhost:8001")
+ORDER_BASE = os.getenv("ORDER_SERVICE_URL", "http://localhost:8002")
+PAYMENT_BASE = os.getenv("PAYMENT_SERVICE_URL", "http://localhost:8003")
 
 USER_IDS = [str(uuid4()) for _ in range(10)]
 ORDER_IDS = [str(uuid4()) for _ in range(10)]
@@ -107,6 +109,7 @@ async def storm_phase(client: httpx.AsyncClient, duration_seconds: int = 120):
 
 
 async def main():
+    print(f"Load simulator targets:\n  {USER_BASE}\n  {ORDER_BASE}\n  {PAYMENT_BASE}\n")
     async with httpx.AsyncClient(timeout=35.0) as client:
         while True:
             await normal_phase(client, duration_seconds=480)

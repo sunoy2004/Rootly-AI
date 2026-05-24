@@ -3,7 +3,7 @@ import json
 import logging
 import os
 
-import aioredis
+import redis.asyncio as aioredis
 import asyncpg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -97,7 +97,11 @@ class AnomalyScheduler:
                     await self.redis.publish(
                         "anomaly_events", json.dumps(event.to_dict())
                     )
-                    logger.info(f"Published anomaly: {event.service}/{event.metric}")
+                    logger.info(
+                        f"ANOMALY DETECTED: service={event.service} metric={event.metric} "
+                        f"severity={event.severity} detector={event.detector} "
+                        f"z_score={event.z_score} value={event.current_value:.4f}"
+                    )
             except Exception as exc:
                 logger.error(f"Detection error for {service}: {exc}")
 

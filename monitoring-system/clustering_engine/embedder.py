@@ -1,7 +1,7 @@
 import hashlib
 from typing import List
 
-import aioredis
+import redis.asyncio as aioredis
 import numpy as np
 from sentence_transformers import SentenceTransformer
 

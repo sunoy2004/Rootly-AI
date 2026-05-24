@@ -1,9 +1,11 @@
+# syntax=docker/dockerfile:1.4
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json .
-RUN npm install
+COPY package.json package-lock.json* ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm install --legacy-peer-deps
 
 COPY . .
 RUN npm run build

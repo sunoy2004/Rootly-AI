@@ -4,9 +4,9 @@ import logging
 import os
 from dataclasses import asdict
 
-import aioredis
+import redis.asyncio as aioredis
 
-from anomaly_engine.prometheus_client import PrometheusClient
+from prometheus_client import PrometheusClient
 from evaluator import RuleEvaluator
 
 
@@ -23,8 +23,8 @@ async def subscribe_with_retry(redis_url: str, channel: str, handler_func):
     backoff = 1
     while True:
         try:
-            redis = aioredis.from_url(redis_url)
-            pubsub = redis.pubsub()
+            redis_client = await aioredis.from_url(redis_url)
+            pubsub = redis_client.pubsub()
             await pubsub.subscribe(channel)
             backoff = 1
             async for message in pubsub.listen():
@@ -43,7 +43,7 @@ class RuleEngine:
         self.evaluator = RuleEvaluator()
 
     async def start(self):
-        self.redis = aioredis.from_url(REDIS_URL)
+        self.redis = await aioredis.from_url(REDIS_URL)
         await subscribe_with_retry(REDIS_URL, "anomaly_events", self.handle_anomaly)
 
     async def handle_anomaly(self, data: bytes):

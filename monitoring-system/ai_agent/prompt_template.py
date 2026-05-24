@@ -1,36 +1,32 @@
 from langchain_core.prompts import ChatPromptTemplate
 
 
-SYSTEM = """You are a senior Site Reliability Engineer with 10 years of experience debugging distributed systems. You analyze API failures and produce precise, evidence-based root cause analysis.
+SYSTEM = """You are a senior Site Reliability Engineer specializing in distributed systems and API failures.
 
-Rules:
-1. Only state conclusions supported by evidence.
-2. Do not speculate beyond the data provided.
-3. Be concise. Bullet points over paragraphs.
-4. Always provide a confidence score 0.0 to 1.0.
-5. If evidence is ambiguous, score 0.5 or lower.
-"""
+Analyze logs, metrics, traces, anomalies, and service dependencies.
 
-HUMAN = """Analyze this incident and provide root cause analysis.
+Return ONLY valid JSON matching the schema below. Do not speculate beyond available evidence."""
+
+HUMAN = """Analyze this incident.
 
 SERVICE: {service}
 
-RECENT ERROR LOGS (last 10):
+RECENT ERROR LOGS:
 {error_logs}
 
 CURRENT METRICS:
-- Error rate: {error_rate:.4f} errors/sec
+- Error rate: {error_rate:.4f}/sec
 - p95 Latency: {p95_latency_ms:.0f}ms
-- Request volume: {request_volume:.2f} req/sec
+- Request volume: {request_volume:.2f}/sec
 - DB errors: {db_errors:.4f}/sec
 - Gateway timeouts: {gateway_timeouts:.4f}/sec
 
 FAILURE CLUSTER:
-- Representative error: {cluster_representative}
-- Total occurrences: {cluster_size}
-- Affected services: {affected_services}
+- Representative: {cluster_representative}
+- Size: {cluster_size}
+- Services: {affected_services}
 
-DISTRIBUTED TRACE SUMMARY:
+TRACE SUMMARY:
 - Slowest span: {slowest_span}
 - First error span: {first_error_span}
 - Call chain: {call_chain}
@@ -38,25 +34,60 @@ DISTRIBUTED TRACE SUMMARY:
 SIMILAR PAST INCIDENTS:
 {similar_incidents}
 
-PRE-COMPUTED CONFIDENCE: {pre_confidence}
-(metric_agreement={metric_agreement:.2f}, cluster_strength={cluster_strength:.2f}, memory_similarity={memory_similarity:.2f})
-
-Respond ONLY with this exact JSON, no other text:
+Respond ONLY with this JSON:
 {{
-  "probable_cause": "one sentence",
-  "detailed_explanation": "2-3 sentences",
-  "evidence": ["point1", "point2", "point3"],
-  "debug_steps": ["step1", "step2", "step3"],
+  "root_cause": "one sentence probable root cause",
+  "severity": "WARNING or CRITICAL",
   "confidence": 0.0,
-  "confidence_reasoning": "brief explanation",
-  "estimated_impact": "low/medium/high",
-  "similar_to_past_incident": false,
-  "past_incident_reference": null
+  "affected_services": ["service-a"],
+  "recommended_actions": ["action1", "action2", "action3"],
+  "summary": "2-3 sentence summary with evidence",
+  "evidence": ["point1", "point2"],
+  "debug_steps": ["step1", "step2"]
 }}"""
 
 PROMPT = ChatPromptTemplate.from_messages(
     [
         ("system", SYSTEM),
         ("human", HUMAN),
+    ]
+)
+
+BATCH_HUMAN = """Analyze this BATCHED cluster of related anomalies (do NOT analyze each event separately).
+
+PRIMARY SERVICE: {service}
+CLUSTER SIZE: {cluster_size} events
+AFFECTED SERVICES: {affected_services}
+
+BATCH SUMMARY:
+{batch_summary}
+
+RECENT ERROR LOGS (sample):
+{error_logs}
+
+CURRENT METRICS:
+- Error rate: {error_rate:.4f}/sec
+- p95 Latency: {p95_latency_ms:.0f}ms
+- DB errors: {db_errors:.4f}/sec
+- Gateway timeouts: {gateway_timeouts:.4f}/sec
+
+SIMILAR PAST INCIDENTS:
+{similar_incidents}
+
+Respond ONLY with this JSON:
+{{
+  "root_cause": "one sentence probable root cause for the whole cluster",
+  "severity": "WARNING or CRITICAL",
+  "confidence": 0.0,
+  "affected_services": ["service-a"],
+  "recommended_actions": ["action1", "action2"],
+  "summary": "2-3 sentence summary",
+  "evidence": ["point1", "point2"]
+}}"""
+
+BATCH_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", SYSTEM),
+        ("human", BATCH_HUMAN),
     ]
 )

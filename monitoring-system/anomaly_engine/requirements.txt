@@ -2,9 +2,7 @@ fastapi
 uvicorn[standard]
 httpx
 asyncpg
-aioredis
+redis>=5
 apscheduler
-scikit-learn
-numpy
 python-dotenv
 pydantic

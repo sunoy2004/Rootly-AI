@@ -15,6 +15,10 @@ class ContextFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.timestamp = datetime.datetime.utcnow().isoformat() + "Z"
         record.service = self.service_name
+        record.level = record.levelname
+        record.endpoint = getattr(record, "endpoint", "")
+        record.status_code = getattr(record, "status_code", 0)
+        record.latency_ms = getattr(record, "latency_ms", 0.0)
 
         span = trace.get_current_span()
         ctx = span.get_span_context()
@@ -22,8 +26,8 @@ class ContextFilter(logging.Filter):
             record.trace_id = format(ctx.trace_id, "032x")
             record.span_id = format(ctx.span_id, "016x")
         else:
-            record.trace_id = ""
-            record.span_id = ""
+            record.trace_id = getattr(record, "trace_id", "")
+            record.span_id = getattr(record, "span_id", "")
 
         return True
 
@@ -36,7 +40,10 @@ def setup_logger(service_name: str) -> logging.Logger:
         return logger
 
     formatter = jsonlogger.JsonFormatter(
-        fmt="%(timestamp)s %(service)s %(levelname)s %(message)s %(trace_id)s %(span_id)s",
+        fmt=(
+            "%(timestamp)s %(service)s %(level)s %(levelname)s %(message)s "
+            "%(endpoint)s %(status_code)s %(latency_ms)s %(trace_id)s %(span_id)s"
+        ),
         datefmt="%Y-%m-%dT%H:%M:%S",
     )
 

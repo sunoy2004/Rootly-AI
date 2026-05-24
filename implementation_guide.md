@@ -63,7 +63,175 @@ All microservices write logs to a shared docker volume mounted at `/logs/{servic
 
 ---
 
-## 4. Operational & AI Services (Operations Tier)
+## 4. System Architecture Overview
+
+Rootly-AI is organized into three tiers that work together: simulated applications generate telemetry, observability infrastructure collects it, and the operations/AI tier detects, triages, and diagnoses incidents.
+
+| Tier | Purpose | Key Components |
+|------|---------|----------------|
+| **Application** | Generate realistic traffic and failures | `user-service`, `order-service`, `payment-service`, `load_simulator.py` |
+| **Observability** | Collect metrics, logs, and traces | Prometheus, Fluent Bit → Elasticsearch, Jaeger, Grafana |
+| **Operations / AI** | Detect, triage, diagnose, and display | Anomaly Engine → Rule Engine → Incident Manager → AI Agent; Clustering Engine (parallel) |
+
+### High-Level End-to-End Flow
+
+The diagram below shows how all major components connect, including host ports for local access.
+
+```mermaid
+flowchart LR
+    subgraph Apps["Application Tier"]
+        US[user-service :8001]
+        OS[order-service :8002]
+        PS[payment-service :8003]
+        LS[load_simulator]
+    end
+
+    subgraph Telemetry["Observability Tier"]
+        PROM[(Prometheus :9090)]
+        ES[(Elasticsearch :9200)]
+        JG[Jaeger :16686]
+        FB[Fluent Bit]
+        GF[Grafana :3001]
+    end
+
+    subgraph Pipeline["Operations / AI Tier"]
+        AE[Anomaly Engine :8004]
+        RE[Rule Engine :8015]
+        IM[Incident Manager :8013]
+        AI[AI Agent :8008]
+        CE[Clustering Engine :8006]
+    end
+
+    subgraph Storage["Shared Storage"]
+        PG[(PostgreSQL :5432)]
+        RD[(Redis :6379)]
+        CH[(ChromaDB :8005)]
+    end
+
+    subgraph UI["Presentation"]
+        DASH[React Dashboard :5173]
+    end
+
+    LS --> Apps
+    Apps --> PROM
+    Apps --> FB --> ES
+    Apps --> JG
+    PROM --> GF
+    ES --> GF
+
+    AE -->|poll metrics| PROM
+    AE --> PG
+    AE -->|anomaly_events| RD
+
+    RE -->|subscribe| RD
+    RE -->|rule_matches / needs_ai_analysis| RD
+
+    IM -->|subscribe| RD
+    IM --> PG
+    IM -->|incidents_for_ai / incidents_to_alert| RD
+
+    AI -->|subscribe incidents_for_ai| RD
+    AI --> ES
+    AI --> PROM
+    AI --> JG
+    AI --> CH
+    AI --> PG
+
+    CE --> ES
+    CE --> PG
+    CE -->|cluster_updates| RD
+
+    DASH --> IM
+    DASH --> PROM
+```
+
+### Redis Pub/Sub Event Bus
+
+Redis channels coordinate the event-driven pipeline. Each channel has a single publisher and one or more subscribers.
+
+```mermaid
+flowchart LR
+    AE[Anomaly Engine] -->|publish| C1[anomaly_events]
+    C1 --> RE[Rule Engine]
+
+    RE -->|publish| C2[rule_matches]
+    RE -->|publish| C3[needs_ai_analysis]
+    C2 --> IM[Incident Manager]
+    C3 --> IM
+
+    IM -->|publish| C4[incidents_for_ai]
+    IM -->|publish| C5[incidents_to_alert]
+    IM -->|publish| C6[incidents_resolved]
+    C4 --> AI[AI Agent]
+    C6 --> AI
+    AI -->|publish| C5
+
+    CE[Clustering Engine] -->|publish| C7[cluster_updates]
+
+    C5 -.->|future| AL[Alert System]
+```
+
+| Channel | Publisher | Subscriber(s) |
+|---------|-----------|---------------|
+| `anomaly_events` | Anomaly Engine | Rule Engine |
+| `rule_matches` | Rule Engine | Incident Manager |
+| `needs_ai_analysis` | Rule Engine | Incident Manager |
+| `incidents_for_ai` | Incident Manager | AI Agent |
+| `incidents_to_alert` | Incident Manager, AI Agent | Alert System *(skipped for now)* |
+| `incidents_resolved` | Incident Manager | AI Agent *(RAG memory)* |
+| `cluster_updates` | Clustering Engine | *(future consumers)* |
+
+### Step-by-Step Incident Pipeline
+
+This flowchart walks through the main incident path from detection to dashboard display.
+
+```mermaid
+flowchart TD
+    START([Load Simulator generates traffic]) --> APPS[Microservices emit metrics, logs, traces]
+
+    APPS --> PROM[(Prometheus)]
+    APPS --> ES[(Elasticsearch via Fluent Bit)]
+    APPS --> JG[Jaeger]
+
+    PROM --> DETECT[Anomaly Engine polls every 60s]
+    DETECT --> ZSCORE[Z-Score per metric]
+    DETECT --> IFOR[Isolation Forest multivariate]
+    ZSCORE --> DEDUP{Redis dedup key exists?}
+    IFOR --> DEDUP
+    DEDUP -->|No| SAVE_ANOM[Save to PostgreSQL anomalies]
+    SAVE_ANOM --> PUB_ANOM[Publish anomaly_events]
+
+    PUB_ANOM --> RULE[Rule Engine evaluates rules.yaml]
+    RULE --> MATCH{Rule matches?}
+
+    MATCH -->|Yes| RULE_INC[Incident Manager: source=RULE_ENGINE<br/>root_cause from rule]
+    MATCH -->|No| AI_ROUTE[Incident Manager: source=AI_AGENT<br/>root_cause=null]
+    RULE_INC --> ALERT1[Publish incidents_to_alert]
+    AI_ROUTE --> PUB_AI[Publish incidents_for_ai]
+
+    PUB_AI --> AGENT[AI Agent gathers context]
+    AGENT --> RAG[ChromaDB similar incidents]
+    AGENT --> LOGS[Elasticsearch error logs]
+    AGENT --> METRICS[Prometheus snapshots]
+    AGENT --> TRACES[Jaeger spans]
+    RAG --> LLM[LLM analysis]
+    LOGS --> LLM
+    METRICS --> LLM
+    TRACES --> LLM
+    LLM --> UPDATE[Update incident root_cause + confidence]
+    UPDATE --> ALERT2[Publish incidents_to_alert]
+
+    ALERT1 --> DASH[Dashboard polls Incident Manager API]
+    ALERT2 --> DASH
+
+    PARALLEL[Clustering Engine every 5m] --> ES
+    PARALLEL --> CLUSTERS[Upsert failure_clusters in PostgreSQL]
+    CLUSTERS --> CLUSTER_PUB[Publish cluster_updates]
+```
+
+---
+
+## 5. Operational & AI Services (Operations Tier)
 
 These services comprise the event-driven monitoring, detection, and diagnostic pipeline:
 
@@ -121,7 +289,7 @@ flowchart TD
 
 ---
 
-## 5. Sequence and Data Flow Diagrams
+## 6. Sequence and Data Flow Diagrams
 
 ### Incident Detection, Diagnostic, and Alerting Flow
 
@@ -176,7 +344,7 @@ sequenceDiagram
 
 ---
 
-## 6. How to Run Each Service
+## 7. How to Run Each Service
 
 Follow this guide to get all backend components running in Docker.
 
@@ -185,10 +353,22 @@ Copy the template configuration file `.env.example` in the directory root to `.e
 ```powershell
 cp .env.example .env
 ```
-Ensure you update keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `SLACK_WEBHOOK_URL`, or SMTP settings in `.env` if you want to test AI diagnostics and alert dispatches.
+Set `LLM_API_KEY`, `LLM_MODEL`, and `LLM_BASE_URL` in `.env` for any OpenAI-compatible provider (OpenAI, Groq, xAI Grok, etc.). All internal service URLs in `.env.example` already use Docker Compose hostnames (`postgres`, `redis`, `elasticsearch`, etc.).
 
 ### Step 2: Spin Up All Services in Docker
-Build and launch all background infrastructure, monitored apps, and AI/operations engines using a single command:
+
+Heavy ML dependencies (`torch`, `sentence-transformers`, `faiss`, `scikit-learn`) are built once into the shared `rootly-ml-base:local` image. Build that image first, then everything else:
+
+```powershell
+$env:DOCKER_BUILDKIT = "1"
+$env:COMPOSE_DOCKER_CLI_BUILD = "1"
+docker compose build ml-base
+docker compose up -d --build
+```
+
+After the first build, changing only Python source code reuses cached pip layers — you should not re-download GB-sized packages unless `requirements.txt` or `docker/ml-base-requirements.txt` changes.
+
+Build and launch all background infrastructure, monitored apps, and AI/operations engines:
 ```powershell
 docker compose up -d --build
 ```
@@ -199,7 +379,7 @@ This command builds and runs:
 - **Database Initializer**: `es-init` (sets up Elasticsearch index mappings and PostgreSQL schema)
 - **AI & Operations Services**:
   - `anomaly-engine` (port 8004): Runs metric anomaly detectors (Z-Score & Isolation Forest)
-  - `rule-engine` (port 8005): Evaluates metric alerts against deterministic rules
+  - `rule-engine` (port 8015): Evaluates metric alerts against deterministic rules
   - `clustering-engine` (port 8006): Clusters application error logs using SentenceTransformers & FAISS
   - `incident-manager` (port 8013/8007): Tracks incidents, routes to AI, manages transitions and escalations
   - `ai-agent` (port 8008): Queries logs/traces/memory and calls LLMs for root cause diagnosis
@@ -231,7 +411,7 @@ Open [http://localhost:5173](http://localhost:5173) in your browser. Log in with
 ---
 
 
-## 7. Operational Algorithms
+## 8. Operational Algorithms
 
 ### 1. Z-Score Metric Detection
 For each service and telemetry metric (e.g., `p95_latency_ms`), the [ZScoreDetector](file:///e:/Rootly-AI/monitoring-system/anomaly_engine/zscore_detector.py) keeps a rolling double-ended queue `deque(maxlen=30)`.
@@ -264,7 +444,7 @@ When an incident is routed to the AI Agent:
 
 ---
 
-## 8. Division of Labor & Branching Strategy
+## 9. Division of Labor & Branching Strategy
 
 Given the 8-hour submission deadline, development is split between API/Infrastructure and AI pipelines, while future features (like the Slack/Email Alert System) are skipped.
 

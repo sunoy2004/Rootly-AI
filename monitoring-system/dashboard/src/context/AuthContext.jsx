@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const AuthContext = createContext(null);
 
-const INCIDENT_API = 'http://localhost:8013';
+const INCIDENT_API = import.meta.env.VITE_API_URL || '/api';
 
 export function AuthProvider({ children }) {
   const [token, setToken] = useState(null);

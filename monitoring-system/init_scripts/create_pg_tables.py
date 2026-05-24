@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS incidents (
     resolved_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS ai_analyses (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    incident_id UUID REFERENCES incidents(id),
+    root_cause TEXT NOT NULL,
+    severity VARCHAR(20) NOT NULL,
+    confidence FLOAT NOT NULL,
+    affected_services TEXT[] NOT NULL DEFAULT '{}',
+    recommended_actions TEXT[] NOT NULL DEFAULT '{}',
+    summary TEXT,
+    raw_response JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_analyses_incident_id
+    ON ai_analyses (incident_id, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_anomalies_service_metric_ts
     ON anomalies (service, metric, timestamp DESC);
 

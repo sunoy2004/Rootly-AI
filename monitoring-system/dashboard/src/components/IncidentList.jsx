@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getIncidents, updateIncident } from '../api/client';
+import { getIncidents, updateIncident, connectLiveIncidents } from '../api/client';
 
 const STATUS_OPTIONS = ['', 'OPEN', 'ACKNOWLEDGED', 'RESOLVED'];
 const SEVERITY_OPTIONS = ['', 'WARNING', 'CRITICAL'];
@@ -146,6 +146,30 @@ export default function IncidentList() {
     fetchIncidents();
     const interval = setInterval(fetchIncidents, 30000);
     return () => clearInterval(interval);
+  }, [filters]);
+
+  useEffect(() => {
+    const conn = connectLiveIncidents({
+      onIncident: (incident) => {
+        setIncidents((prev) => {
+          const exists = prev.some((i) => i.id === incident.id);
+          if (exists) {
+            return prev.map((i) => (i.id === incident.id ? { ...i, ...incident } : i));
+          }
+          if (filters.status && incident.status !== filters.status) return prev;
+          if (filters.severity && incident.severity !== filters.severity) return prev;
+          if (
+            filters.service &&
+            !incident.affected_services?.includes(filters.service)
+          ) {
+            return prev;
+          }
+          return [incident, ...prev].slice(0, 50);
+        });
+      },
+      onError: (err) => console.warn('Incident WS error:', err),
+    });
+    return () => conn.close();
   }, [filters]);
 
   async function handleAcknowledge(id) {

@@ -5,7 +5,7 @@ from typing import Optional
 import yaml
 
 from models import Rule, RuleCondition, RuleMatch
-from anomaly_engine.models import MetricSnapshot
+from metric_models import MetricSnapshot
 
 
 logger = logging.getLogger(__name__)

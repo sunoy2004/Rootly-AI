@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 from typing import Optional
 
 from fastapi import FastAPI
-import aioredis
+from fastapi.middleware.cors import CORSMiddleware
+import redis.asyncio as aioredis
 import asyncpg
 
 from auth import LoginRequest, create_access_token, USERS, pwd_context
 from api import router as api_router
+from ws_hub import router as ws_router
 from manager import IncidentManager
 from lifecycle import IncidentLifecycle
 
@@ -42,7 +44,8 @@ async def subscribe_with_retry(redis_url: str, channel: str, handler_func):
             backoff = 1
             async for message in pubsub.listen():
                 if message["type"] == "message":
-                    await handler_func(message["data"])
+                    payload = json.loads(message["data"])
+                    await handler_func(payload)
         except Exception as e:
             logger.error(f"Redis disconnected: {e}. Retrying in {backoff}s")
             await asyncio.sleep(backoff)
@@ -61,23 +64,52 @@ async def lifespan(app: FastAPI):
     lifecycle = IncidentLifecycle(pg_pool, redis)
     await lifecycle.start()
 
+    async with pg_pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS ai_analyses (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                incident_id UUID REFERENCES incidents(id),
+                root_cause TEXT NOT NULL,
+                severity VARCHAR(20) NOT NULL,
+                confidence FLOAT NOT NULL,
+                affected_services TEXT[] NOT NULL DEFAULT '{}',
+                recommended_actions TEXT[] NOT NULL DEFAULT '{}',
+                summary TEXT,
+                raw_response JSONB,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
     task1 = asyncio.create_task(
         subscribe_with_retry(REDIS_URL, "rule_matches", manager.handle_rule_match)
     )
-    task2 = asyncio.create_task(
-        subscribe_with_retry(REDIS_URL, "needs_ai_analysis", manager.handle_needs_ai)
-    )
+    from ws_hub import redis_event_bridge
+
+    task_bridge = asyncio.create_task(redis_event_bridge(REDIS_URL))
 
     yield
 
     task1.cancel()
-    task2.cancel()
+    task_bridge.cancel()
     await lifecycle.shutdown()
     await redis.close()
     await pg_pool.close()
 
 
 app = FastAPI(title="Incident Manager", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.post("/auth/login")
@@ -100,6 +132,7 @@ async def health():
 
 
 app.include_router(api_router, dependencies=[])
+app.include_router(ws_router, dependencies=[])
 
 
 if __name__ == "__main__":

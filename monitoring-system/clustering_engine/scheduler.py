@@ -2,7 +2,7 @@ import json
 import logging
 import os
 
-import aioredis
+import redis.asyncio as aioredis
 import asyncpg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

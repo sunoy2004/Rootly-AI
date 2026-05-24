@@ -3,7 +3,7 @@ import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncpg
-import aioredis
+import redis.asyncio as aioredis
 
 
 logger = logging.getLogger(__name__)

@@ -173,7 +173,7 @@ services:
     volumes:
       - ./init_scripts:/init_scripts
     command: >
-      sh -c "pip install elasticsearch asyncpg psycopg2-binary -q &&
+      sh -c "pip install 'elasticsearch>=8.0.0,<9' asyncpg psycopg2-binary -q &&
       python /init_scripts/create_es_template.py &&
       python /init_scripts/create_pg_tables.py"
     depends_on:
@@ -184,11 +184,26 @@ services:
     networks:
       - monitoring-net
 
+  ml-base:
+    build:
+      context: .
+      dockerfile: docker/ml-base.Dockerfile
+    image: rootly-ml-base:local
+    entrypoint: ["/bin/true"]
+    restart: "no"
+
   anomaly-engine:
-    build: ./anomaly_engine
+    build:
+      context: ./anomaly_engine
+      dockerfile: Dockerfile
     ports:
       - "8004:8004"
     env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -204,8 +219,13 @@ services:
   rule-engine:
     build: ./rule_engine
     ports:
-      - "8005:8005"
+      - "8015:8005"
     env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8005/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       redis:
         condition: service_healthy
@@ -215,10 +235,17 @@ services:
       - monitoring-net
 
   clustering-engine:
-    build: ./clustering_engine
+    build:
+      context: ./clustering_engine
+      dockerfile: Dockerfile
     ports:
       - "8006:8006"
     env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -236,6 +263,11 @@ services:
     ports:
       - "8013:8007"
     env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
@@ -247,10 +279,17 @@ services:
       - monitoring-net
 
   ai-agent:
-    build: ./ai_agent
+    build:
+      context: ./ai_agent
+      dockerfile: Dockerfile
     ports:
       - "8008:8008"
     env_file: .env
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy

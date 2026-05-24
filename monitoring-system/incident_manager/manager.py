@@ -2,12 +2,25 @@ import json
 import logging
 from datetime import datetime
 from typing import Optional
+from uuid import UUID
 
-import aioredis
+import redis.asyncio as aioredis
 import asyncpg
 
 
 logger = logging.getLogger(__name__)
+
+
+def serialize_row(row_dict: dict) -> dict:
+    out = {}
+    for key, value in row_dict.items():
+        if isinstance(value, datetime):
+            out[key] = value.isoformat()
+        elif isinstance(value, UUID):
+            out[key] = str(value)
+        else:
+            out[key] = value
+    return out
 
 
 class IncidentManager:
@@ -47,7 +60,7 @@ class IncidentManager:
                 incident = await conn.fetchrow(
                     "SELECT * FROM incidents WHERE id = $1", existing["id"]
                 )
-                incident_dict = dict(incident)
+                incident_dict = serialize_row(dict(incident))
             else:
                 row = await conn.fetchrow(
                     """
@@ -63,7 +76,7 @@ class IncidentManager:
                     diagnosis,
                     confidence,
                 )
-                incident_dict = dict(row)
+                incident_dict = serialize_row(dict(row))
 
         await self.redis.publish("incidents_to_alert", json.dumps(incident_dict))
         return incident_dict
@@ -90,7 +103,7 @@ class IncidentManager:
                 incident = await conn.fetchrow(
                     "SELECT * FROM incidents WHERE id = $1", existing["id"]
                 )
-                incident_dict = dict(incident)
+                incident_dict = serialize_row(dict(incident))
             else:
                 row = await conn.fetchrow(
                     """
@@ -104,10 +117,11 @@ class IncidentManager:
                     severity,
                     [service],
                 )
-                incident_dict = dict(row)
+                incident_dict = serialize_row(dict(row))
 
         await self.redis.publish(
-            "incidents_for_ai", json.dumps({"incident": incident_dict, "anomaly_event": anomaly_event})
+            "incidents_for_ai",
+            json.dumps({"incident": incident_dict, "anomaly_event": anomaly_event}),
         )
         return incident_dict
 
@@ -137,9 +151,9 @@ class IncidentManager:
                 resolution_notes,
             )
 
-        incident_dict = dict(incident)
+        incident_dict = serialize_row(dict(incident))
         incident_dict["status"] = "RESOLVED"
-        incident_dict["resolved_at"] = datetime.utcnow()
+        incident_dict["resolved_at"] = datetime.utcnow().isoformat()
         incident_dict["resolution_notes"] = resolution_notes
 
         await self.redis.publish("incidents_resolved", json.dumps(incident_dict))

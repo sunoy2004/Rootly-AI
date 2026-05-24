@@ -4,6 +4,7 @@ import MetricsPanel from '../components/MetricsPanel';
 import IncidentList from '../components/IncidentList';
 import ClusterView from '../components/ClusterView';
 import LogViewer from '../components/LogViewer';
+import AnomalyPanel from '../components/AnomalyPanel';
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -92,6 +93,11 @@ export default function Dashboard() {
           <div style={{ backgroundColor: '#1a1d27', borderRadius: 12, padding: 16 }}>
             <ServiceHealthGrid />
           </div>
+        </section>
+
+        {/* Section: Anomalies */}
+        <section style={{ marginBottom: 32 }}>
+          <AnomalyPanel />
         </section>
 
         {/* Section 3: Two columns */}

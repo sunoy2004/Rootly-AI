@@ -9,12 +9,14 @@ import asyncpg
 from auth import get_current_user
 from models import IncidentResponse, IncidentStatus, IncidentSeverity, UpdateIncidentRequest
 from manager import IncidentManager
+from es_logs import search_logs
 
 
 router = APIRouter()
 
 INCIDENT_MANAGER_URL = os.getenv("INCIDENT_MANAGER_URL", "http://incident-manager:8007")
 CLUSTERING_ENGINE_URL = os.getenv("CLUSTERING_ENGINE_URL", "http://clustering-engine:8006")
+ANOMALY_ENGINE_URL = os.getenv("ANOMALY_ENGINE_URL", "http://anomaly-engine:8004")
 JAEGER_URL = os.getenv("JAEGER_URL", "http://jaeger:16686")
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
 
@@ -102,34 +104,26 @@ async def get_incident(
         raise HTTPException(status_code=404, detail="Incident not found")
 
     incident_dict = dict(incident)
-
-    cluster = None
-    if incident_dict.get("cluster_id"):
-        cluster = await conn.fetchrow(
-            "SELECT * FROM failure_clusters WHERE id = $1", incident_dict["cluster_id"]
-        )
+    for key, value in incident_dict.items():
+        if hasattr(value, "isoformat"):
+            incident_dict[key] = value.isoformat()
+        elif hasattr(value, "hex"):
+            incident_dict[key] = str(value)
 
     service = incident_dict["affected_services"][0] if incident_dict.get("affected_services") else ""
 
+    cluster = None
     error_logs = []
-    async with httpx.AsyncClient() as client:
-        try:
-            es_resp = await client.get(
-                f"{ES_URL}/api-logs-*/_search",
-                params={
-                    "q": f"service:{service} AND level:ERROR",
-                    "size": 20,
-                    "sort": "@timestamp:desc",
-                },
-            )
-            es_data = es_resp.json()
-            for hit in es_data.get("hits", {}).get("hits", []):
-                src = hit.get("_source", {})
-                error_logs.append(src.get("message", ""))
-        except Exception:
-            pass
+    anomalies = []
 
     async with pg_pool.acquire() as conn:
+        if incident_dict.get("cluster_id"):
+            cluster_row = await conn.fetchrow(
+                "SELECT * FROM failure_clusters WHERE id = $1", incident_dict["cluster_id"]
+            )
+            if cluster_row:
+                cluster = dict(cluster_row)
+
         anomalies = await conn.fetch(
             """
             SELECT * FROM anomalies
@@ -140,10 +134,12 @@ async def get_incident(
             service,
         )
 
+    error_logs = await search_logs(service=service, level="ERROR", limit=20)
+
     return {
         "incident": incident_dict,
-        "cluster": dict(cluster) if cluster else None,
-        "error_logs": error_logs[:20],
+        "cluster": cluster,
+        "error_logs": [log.get("message", "") for log in error_logs],
         "recent_anomalies": [dict(a) for a in anomalies],
     }
 
@@ -231,6 +227,26 @@ async def get_stats(
     }
 
 
+@router.get("/anomalies")
+async def list_anomalies(
+    service: Optional[str] = Query(None),
+    severity: Optional[str] = Query(None),
+    limit: int = Query(50, le=200),
+    user: str = Depends(get_current_user),
+):
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{ANOMALY_ENGINE_URL}/anomalies",
+                params={"service": service, "severity": severity, "limit": limit},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            return []
+
+
 @router.get("/clusters")
 async def get_clusters(
     status: str = Query("open"),
@@ -238,46 +254,29 @@ async def get_clusters(
     user: str = Depends(get_current_user),
 ):
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{CLUSTERING_ENGINE_URL}/clusters",
-            params={"status": status, "limit": limit},
-        )
-        return resp.json()
+        try:
+            resp = await client.get(
+                f"{CLUSTERING_ENGINE_URL}/clusters",
+                params={"status": status, "limit": limit},
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception:
+            return []
 
 
 @router.get("/services/{service_name}/logs")
 async def get_service_logs(
     service_name: str,
     level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     user: str = Depends(get_current_user),
 ):
-    query_str = f"service:{service_name}"
-    if level:
-        query_str += f" AND level:{level}"
-
-    logs = []
-    async with httpx.AsyncClient() as client:
-        try:
-            es_resp = await client.get(
-                f"{ES_URL}/api-logs-*/_search",
-                params={
-                    "q": query_str,
-                    "size": limit,
-                    "sort": "@timestamp:desc",
-                },
-            )
-            es_data = es_resp.json()
-            for hit in es_data.get("hits", {}).get("hits", []):
-                src = hit.get("_source", {})
-                logs.append({
-                    "timestamp": src.get("@timestamp"),
-                    "level": src.get("level", "INFO"),
-                    "message": src.get("message", ""),
-                    "trace_id": src.get("trace_id", "")
-                })
-        except Exception as e:
-            # Fallback or empty if Elasticsearch isn't fully ready yet to prevent crash
-            pass
-
-    return logs
+    return await search_logs(
+        service=service_name,
+        level=level,
+        search_text=search,
+        limit=limit,
+    )

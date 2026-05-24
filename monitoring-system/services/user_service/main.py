@@ -102,6 +102,15 @@ async def login(request: LoginRequest):
         )
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
+    latency_ms = (time.time() - start) * 1000
+    logger.info(
+        "Login succeeded",
+        extra={
+            "endpoint": "/users/login",
+            "status_code": 200,
+            "latency_ms": latency_ms,
+        },
+    )
     return {"token": "fake-jwt", "user_id": str(uuid4())}
 
 

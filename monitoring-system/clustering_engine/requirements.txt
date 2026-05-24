@@ -1,11 +1,8 @@
 fastapi
 uvicorn[standard]
 elasticsearch[async]
-sentence-transformers
-faiss-cpu
-numpy
 asyncpg
-aioredis
+redis>=5
 apscheduler
 python-dotenv
 pydantic
