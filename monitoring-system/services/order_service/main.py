@@ -34,8 +34,18 @@ async def health():
 
 @app.get("/orders/{order_id}")
 async def get_order(order_id: str):
+    start = time.time()
     if random.random() < 0.30:
+        logger.warning(
+            "Order not found",
+            extra={"endpoint": f"/orders/{order_id}", "status_code": 404, "latency_ms": 0},
+        )
         raise HTTPException(status_code=404, detail="Order not found")
+    latency_ms = (time.time() - start) * 1000
+    logger.info(
+        "Order fetched",
+        extra={"endpoint": f"/orders/{order_id}", "status_code": 200, "latency_ms": latency_ms},
+    )
     return {"order_id": order_id, "status": "pending"}
 
 

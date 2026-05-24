@@ -1,29 +1,36 @@
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
-const WS_BASE = import.meta.env.VITE_WS_URL || (
-  typeof window !== 'undefined'
-    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`
-    : 'ws://localhost:8013'
-);
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8013';
+const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8013';
 
-const INCIDENT_BASE = API_BASE || 'http://localhost:8013';
 const PROMETHEUS_BASE = 'http://localhost:9090';
 const AI_BASE = 'http://localhost:8008';
 
 export const incidentAPI = axios.create({
-  baseURL: API_BASE ? `${API_BASE}` : '/api',
+  baseURL: API_BASE,
+  timeout: 20000,
 });
 
 export const prometheusAPI = axios.create({
   baseURL: PROMETHEUS_BASE,
+  timeout: 15000,
 });
 
 export const aiAPI = axios.create({
   baseURL: AI_BASE,
+  timeout: 60000,
 });
 
 let authHeader = {};
+
+export function isRequestAborted(err) {
+  return (
+    axios.isCancel(err) ||
+    err?.code === 'ERR_CANCELED' ||
+    err?.message === 'canceled' ||
+    err?.name === 'CanceledError'
+  );
+}
 
 export function setAuthHeader(header) {
   authHeader = header;
@@ -48,8 +55,8 @@ export async function login(username, password) {
   return response.data;
 }
 
-export async function getIncidents(params = {}) {
-  const response = await incidentAPI.get('/incidents', { params });
+export async function getIncidents(params = {}, signal) {
+  const response = await incidentAPI.get('/incidents', { params, signal });
   return response.data;
 }
 
@@ -63,8 +70,8 @@ export async function updateIncident(id, data) {
   return response.data;
 }
 
-export async function getStats() {
-  const response = await incidentAPI.get('/incidents/stats/summary');
+export async function getStats(signal) {
+  const response = await incidentAPI.get('/incidents/stats/summary', { signal });
   return response.data;
 }
 
@@ -73,20 +80,17 @@ export async function triggerAIAnalysis(id) {
   return response.data;
 }
 
-export async function getClusters(params = {}) {
-  const response = await incidentAPI.get('/clusters', { params });
+export async function getClusters(params = {}, signal) {
+  const response = await incidentAPI.get('/clusters', { params, signal });
   return response.data;
 }
 
-export async function getAnomalies(params = {}) {
-  const response = await incidentAPI.get('/anomalies', { params });
+export async function getAnomalies(params = {}, signal) {
+  const response = await incidentAPI.get('/anomalies', { params, signal });
   return response.data;
 }
 
 function wsUrl(path) {
-  if (API_BASE) {
-    return API_BASE.replace(/^http/, 'ws') + path;
-  }
   return `${WS_BASE}${path}`;
 }
 
@@ -186,8 +190,16 @@ export function connectLiveIncidents({ onIncident, onError }) {
   });
 }
 
-export async function getServiceLogs(serviceName, params = {}) {
-  const response = await incidentAPI.get(`/services/${serviceName}/logs`, { params });
+export async function getLogs(params = {}, signal) {
+  const response = await incidentAPI.get('/logs', { params, signal });
+  return response.data;
+}
+
+export async function getServiceLogs(serviceName, params = {}, signal) {
+  if (!serviceName || serviceName === 'all') {
+    return getLogs(params, signal);
+  }
+  const response = await incidentAPI.get(`/services/${serviceName}/logs`, { params, signal });
   return response.data;
 }
 
@@ -213,9 +225,10 @@ export async function getMetricRange(promql, startMinutesAgo = 30, stepSeconds =
   return points;
 }
 
-export async function getMetricInstant(promql) {
+export async function getMetricInstant(promql, signal) {
   const response = await prometheusAPI.get('/api/v1/query', {
     params: { query: promql },
+    signal,
   });
   const results = response.data?.data?.result || [];
   return results.map((r) => ({

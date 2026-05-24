@@ -21,6 +21,16 @@ def _normalize_result(raw: dict, context: dict) -> Dict[str, Any]:
 
     actions = raw.get("recommended_actions") or raw.get("debug_steps") or []
 
+    debug_steps = raw.get("debug_steps") or []
+    if not debug_steps and actions:
+        debug_steps = []
+
+    action_set = {a.lower().strip() for a in actions if isinstance(a, str)}
+    debug_steps = [
+        s for s in debug_steps
+        if isinstance(s, str) and s.lower().strip() not in action_set
+    ]
+
     return {
         "root_cause": raw.get("root_cause") or raw.get("probable_cause", "Unknown"),
         "severity": raw.get("severity", "WARNING"),
@@ -29,7 +39,7 @@ def _normalize_result(raw: dict, context: dict) -> Dict[str, Any]:
         "recommended_actions": actions,
         "summary": raw.get("summary") or raw.get("detailed_explanation", ""),
         "evidence": raw.get("evidence", []),
-        "debug_steps": raw.get("debug_steps", actions),
+        "debug_steps": debug_steps,
         "probable_cause": raw.get("root_cause") or raw.get("probable_cause", ""),
     }
 

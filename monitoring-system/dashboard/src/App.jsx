@@ -8,6 +8,7 @@ import {
 import { AuthProvider } from './context/AuthContext';
 import Dashboard from './pages/Dashboard';
 import IncidentDetail from './pages/IncidentDetail';
+import ErrorBoundary from './components/ErrorBoundary';
 import './index.css';
 
 function AppRoutes() {
@@ -22,10 +23,12 @@ function AppRoutes() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
-    </BrowserRouter>
+    <ErrorBoundary name="App" title="Dashboard crashed">
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }

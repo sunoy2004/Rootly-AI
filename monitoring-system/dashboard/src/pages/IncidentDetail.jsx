@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { getIncident, updateIncident } from '../api/client';
 import RootCauseCard from '../components/RootCauseCard';
 import TraceViewer from '../components/TraceViewer';
+import RelatedErrorLogs from '../components/RelatedErrorLogs';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 function SeverityBadge({ severity }) {
   const color = severity === 'CRITICAL' ? '#ef4444' : '#f59e0b';
@@ -137,9 +139,20 @@ export default function IncidentDetail() {
     async function fetchIncident() {
       try {
         const data = await getIncident(id);
-        setIncident(data.incident || data);
+        const inc = { ...(data.incident || data) };
+        if (data.ai_analysis) inc.ai_analysis = data.ai_analysis;
+        if (data.metrics) {
+          inc.error_rate = data.metrics.error_rate ?? inc.error_rate;
+          inc.p95_latency_ms = data.metrics.p95_latency_ms ?? inc.p95_latency_ms;
+          inc.db_errors = data.metrics.db_errors ?? inc.db_errors;
+          inc.gateway_timeouts = data.metrics.gateway_timeouts ?? inc.gateway_timeouts;
+        }
+        setIncident(inc);
         setCluster(data.cluster);
-        setErrorLogs(data.error_logs || []);
+        setErrorLogs(data.error_logs_raw || data.error_logs || []);
+        if (data.cluster?.member_trace_ids?.length) {
+          setCluster({ ...data.cluster, member_trace_ids: data.cluster.member_trace_ids });
+        }
       } catch (err) {
         console.error('Failed to fetch incident:', err);
       } finally {
@@ -341,45 +354,13 @@ export default function IncidentDetail() {
         {/* Left column */}
         <div style={{ flex: '0 0 60%' }}>
           <section style={{ marginBottom: 24 }}>
-            <RootCauseCard incident={incident} />
+            <ErrorBoundary name="RootCauseCard" title="Analysis unavailable">
+              <RootCauseCard incident={incident} />
+            </ErrorBoundary>
           </section>
 
           <section>
-            <h3
-              style={{
-                color: '#e8eaf0',
-                fontSize: 16,
-                marginBottom: 12,
-              }}
-            >
-              Recent Error Logs
-            </h3>
-            <div
-              style={{
-                backgroundColor: '#1a1d27',
-                border: '1px solid #2a2d3a',
-                borderRadius: 12,
-                padding: 16,
-                maxHeight: 300,
-                overflowY: 'auto',
-              }}
-            >
-              {errorLogs.length === 0 ? (
-                <div style={{ color: '#8b8fa8', fontSize: 13 }}>No error logs available</div>
-              ) : (
-                <pre
-                  style={{
-                    margin: 0,
-                    color: '#e8eaf0',
-                    fontSize: 12,
-                    fontFamily: 'monospace',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {errorLogs.join('\n')}
-                </pre>
-              )}
-            </div>
+            <RelatedErrorLogs rawLogs={errorLogs} />
           </section>
         </div>
 
@@ -398,8 +379,8 @@ export default function IncidentDetail() {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <StatCard
                 label="Error Rate"
-                value={incident.error_rate || 0}
-                unit="errors/s"
+                value={(incident.error_rate || 0) * 100}
+                unit="%"
               />
               <StatCard
                 label="p95 Latency"

@@ -73,7 +73,9 @@ class PrometheusClient:
         )
         request_volume_expr = f'sum(rate(http_requests_total{{job="{job_name}"}}[5m]))'
         db_errors_expr = f'sum(rate(db_connection_errors_total{{service="{service}"}}[5m]))'
-        gateway_timeouts_expr = f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))'
+        gateway_timeouts_expr = (
+            f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))'
+        )
 
         import asyncio
 

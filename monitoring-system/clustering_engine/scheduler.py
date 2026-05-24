@@ -40,7 +40,8 @@ class ClusteringScheduler:
         pg_pool = await asyncpg.create_pool(pg_url, min_size=2, max_size=10)
         self.store = ClusterStore(pg_pool)
 
-        self.scheduler.add_job(self.run_clustering, "interval", minutes=5)
+        self.scheduler.add_job(self.run_clustering, "interval", minutes=2)
+        await self.run_clustering()
         self.scheduler.start()
         logger.info("Clustering scheduler started")
 
@@ -53,8 +54,8 @@ class ClusteringScheduler:
         try:
             entries = await self.es_client.get_recent_errors(minutes=30)
 
-            if len(entries) < 2:
-                logger.info("Insufficient error logs for clustering")
+            if len(entries) < 1:
+                logger.info("No error/warning logs for clustering")
                 return
 
             messages = [e.message for e in entries]

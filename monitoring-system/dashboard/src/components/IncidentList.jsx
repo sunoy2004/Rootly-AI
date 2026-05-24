@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getIncidents, updateIncident, connectLiveIncidents } from '../api/client';
+import {
+  getIncidents,
+  updateIncident,
+  connectLiveIncidents,
+  isRequestAborted,
+} from '../api/client';
 
 const STATUS_OPTIONS = ['', 'OPEN', 'ACKNOWLEDGED', 'RESOLVED'];
 const SEVERITY_OPTIONS = ['', 'WARNING', 'CRITICAL'];
@@ -123,33 +128,43 @@ export default function IncidentList() {
     service: '',
   });
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [resolvingId, setResolvingId] = useState(null);
   const [resolutionNotes, setResolutionNotes] = useState('');
 
-  async function fetchIncidents() {
-    try {
-      const params = {};
-      if (filters.status) params.status = filters.status;
-      if (filters.severity) params.severity = filters.severity;
-      if (filters.service) params.service = filters.service;
-
-      const data = await getIncidents(params);
-      setIncidents(data);
-    } catch (err) {
-      console.error('Failed to fetch incidents:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
+    const controller = new AbortController();
+
+    async function fetchIncidents() {
+      try {
+        const params = {};
+        if (filters.status) params.status = filters.status;
+        if (filters.severity) params.severity = filters.severity;
+        if (filters.service) params.service = filters.service;
+
+        const data = await getIncidents(params, controller.signal);
+        if (!controller.signal.aborted) setIncidents(data);
+      } catch (err) {
+        if (!isRequestAborted(err)) {
+          console.error('Failed to fetch incidents:', err);
+        }
+      } finally {
+        if (!controller.signal.aborted) setLoading(false);
+      }
+    }
+
     fetchIncidents();
     const interval = setInterval(fetchIncidents, 30000);
-    return () => clearInterval(interval);
-  }, [filters]);
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
+  }, [filters, refreshKey]);
 
   useEffect(() => {
-    const conn = connectLiveIncidents({
+    let conn;
+    const timer = setTimeout(() => {
+      conn = connectLiveIncidents({
       onIncident: (incident) => {
         setIncidents((prev) => {
           const exists = prev.some((i) => i.id === incident.id);
@@ -167,9 +182,13 @@ export default function IncidentList() {
           return [incident, ...prev].slice(0, 50);
         });
       },
-      onError: (err) => console.warn('Incident WS error:', err),
+      onError: () => {},
     });
-    return () => conn.close();
+    }, 1000);
+    return () => {
+      clearTimeout(timer);
+      conn?.close();
+    };
   }, [filters]);
 
   async function handleAcknowledge(id) {
@@ -190,7 +209,7 @@ export default function IncidentList() {
       });
       setResolvingId(null);
       setResolutionNotes('');
-      fetchIncidents();
+      setRefreshKey((k) => k + 1);
     } catch (err) {
       console.error('Failed to resolve:', err);
     }
@@ -266,9 +285,15 @@ export default function IncidentList() {
       ) : incidents.length === 0 ? (
         <div style={{ color: '#8b8fa8', padding: 20 }}>No incidents found</div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div
+          style={{
+            maxHeight: 'min(520px, 60vh)',
+            overflowY: 'auto',
+            overflowX: 'auto',
+          }}
+        >
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
+            <thead style={{ position: 'sticky', top: 0, backgroundColor: '#1a1d27', zIndex: 1 }}>
               <tr style={{ borderBottom: '1px solid #2a2d3a' }}>
                 <th style={{ textAlign: 'left', padding: '10px 8px', color: '#8b8fa8', fontSize: 12 }}>Severity</th>
                 <th style={{ textAlign: 'left', padding: '10px 8px', color: '#8b8fa8', fontSize: 12 }}>Service</th>

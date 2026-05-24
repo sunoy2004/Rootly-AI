@@ -149,6 +149,21 @@ class AIBatchProcessor:
                 json.dumps(result),
             )
 
+            cluster_row = await conn.fetchrow(
+                """
+                SELECT id FROM failure_clusters
+                WHERE status = 'open' AND $1 = ANY(affected_services)
+                ORDER BY last_seen DESC LIMIT 1
+                """,
+                service,
+            )
+            if cluster_row:
+                await conn.execute(
+                    "UPDATE incidents SET cluster_id = $1 WHERE id = $2",
+                    cluster_row["id"],
+                    row["id"],
+                )
+
         incident_dict = {k: _serialize(v) for k, v in dict(row).items()}
         incident_dict["ai_analysis"] = result
         incident_dict["cluster_size"] = len(events)

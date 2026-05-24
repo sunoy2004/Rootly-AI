@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getClusters } from '../api/client';
+import { getClusters, isRequestAborted } from '../api/client';
 
 function StatusPill({ status }) {
   const color = status === 'open' ? '#f59e0b' : '#10b981';
@@ -57,20 +57,30 @@ export default function ClusterView() {
   const [expandedId, setExpandedId] = useState(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function fetchClusters() {
       try {
-        const data = await getClusters({ status: 'open', limit: 20 });
-        setClusters(data);
+        const data = await getClusters(
+          { status: 'open', limit: 20 },
+          controller.signal
+        );
+        if (!controller.signal.aborted) setClusters(data);
       } catch (err) {
-        console.error('Failed to fetch clusters:', err);
+        if (!isRequestAborted(err)) {
+          console.error('Failed to fetch clusters:', err);
+        }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     fetchClusters();
     const interval = setInterval(fetchClusters, 60000);
-    return () => clearInterval(interval);
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
   }, []);
 
   if (loading) {

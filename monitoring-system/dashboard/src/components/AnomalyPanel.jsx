@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAnomalies, connectLiveAnomalies } from '../api/client';
+import { getAnomalies, connectLiveAnomalies, isRequestAborted } from '../api/client';
 
 function SeverityBadge({ severity }) {
   const color = severity === 'CRITICAL' ? '#ef4444' : '#f59e0b';
@@ -15,23 +15,32 @@ export default function AnomalyPanel() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function fetchAnomalies() {
       try {
-        const data = await getAnomalies({ limit: 20 });
+        const data = await getAnomalies({ limit: 20 }, controller.signal);
         setAnomalies(Array.isArray(data) ? data : data.anomalies || []);
       } catch (err) {
-        console.error('Failed to fetch anomalies:', err);
+        if (!isRequestAborted(err)) {
+          console.error('Failed to fetch anomalies:', err);
+        }
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
     fetchAnomalies();
     const interval = setInterval(fetchAnomalies, 60000);
-    return () => clearInterval(interval);
+    return () => {
+      controller.abort();
+      clearInterval(interval);
+    };
   }, []);
 
   useEffect(() => {
-    const conn = connectLiveAnomalies({
+    let conn;
+    const timer = setTimeout(() => {
+      conn = connectLiveAnomalies({
       onAnomaly: (anomaly) => {
         setAnomalies((prev) => {
           const key = `${anomaly.service}-${anomaly.metric}-${anomaly.timestamp}`;
@@ -41,9 +50,13 @@ export default function AnomalyPanel() {
           return [anomaly, ...prev].slice(0, 30);
         });
       },
-      onError: (err) => console.warn('Anomaly WS error:', err),
+      onError: () => {},
     });
-    return () => conn.close();
+    }, 1000);
+    return () => {
+      clearTimeout(timer);
+      conn?.close();
+    };
   }, []);
 
   return (

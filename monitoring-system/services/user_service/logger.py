@@ -3,6 +3,12 @@ import sys
 import datetime
 from logging.handlers import RotatingFileHandler
 
+
+class FlushingRotatingFileHandler(RotatingFileHandler):
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
 from pythonjsonlogger import jsonlogger
 from opentelemetry import trace
 
@@ -53,7 +59,7 @@ def setup_logger(service_name: str) -> logging.Logger:
     stream_handler.setFormatter(formatter)
     stream_handler.addFilter(context_filter)
 
-    file_handler = RotatingFileHandler(
+    file_handler = FlushingRotatingFileHandler(
         f"/logs/{service_name}.log",
         maxBytes=50 * 1024 * 1024,
         backupCount=3,

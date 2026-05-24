@@ -69,7 +69,16 @@ async def create_payment(request: PaymentRequest):
         GATEWAY_RESPONSE_TIME.labels(service="payment-service").observe(
             time.time() - start
         )
-        return {"payment_id": str(uuid4()), "status": "success"}
+        payment_id = str(uuid4())
+        logger.info(
+            "Payment processed",
+            extra={
+                "endpoint": "/payments",
+                "status_code": 200,
+                "latency_ms": (time.time() - start) * 1000,
+            },
+        )
+        return {"payment_id": payment_id, "status": "success"}
 
     try:
         return await circuit_breaker.call(simulate_gateway)

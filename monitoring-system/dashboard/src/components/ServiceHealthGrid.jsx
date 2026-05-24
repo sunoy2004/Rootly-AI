@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getMetricInstant, getStats } from '../api/client';
+import { getMetricInstant, getStats, isRequestAborted } from '../api/client';
+import { incidentCountFromStats, safeNumber } from '../utils/safeRender';
 
 const SERVICES = ['user-service', 'order-service', 'payment-service'];
 
@@ -41,14 +42,7 @@ function ServiceCard({ service, status, errorRate, p95Latency, incidentCount, la
         minWidth: 200,
       }}
     >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 16,
-        }}
-      >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
         <h3 style={{ color: '#e8eaf0', margin: 0, fontSize: 16 }}>
           {SERVICE_LABELS[service] || service}
         </h3>
@@ -88,54 +82,56 @@ export default function ServiceHealthGrid() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let mounted = true;
+    const controller = new AbortController();
 
     async function fetchData() {
       try {
-        const stats = await getStats();
+        const stats = await getStats(controller.signal);
 
         const servicesData = await Promise.all(
           SERVICES.map(async (service) => {
-            const errorRateResults = await getMetricInstant(
-              `sum(rate(http_requests_total{job="${service}",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="${service}"}[5m]))`
-            );
-            const p95Results = await getMetricInstant(
-              `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="${service}"}[5m])) by (le)) * 1000`
-            );
+            const [errorRateResults, p95Results] = await Promise.all([
+              getMetricInstant(
+                `sum(rate(http_requests_total{job="${service}",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="${service}"}[5m]))`,
+                controller.signal
+              ),
+              getMetricInstant(
+                `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="${service}"}[5m])) by (le)) * 1000`,
+                controller.signal
+              ),
+            ]);
 
-            const errorRate = errorRateResults[0]?.value || 0;
-            const p95Latency = p95Results[0]?.value || 0;
-
-            const serviceStats = stats.by_service?.[service] || {};
-            const criticalCount = 0;
-            const warningCount = serviceStats.count || 0;
+            const errorRate = safeNumber(errorRateResults[0]?.value, 0);
+            const p95Latency = safeNumber(p95Results[0]?.value, 0);
+            const incidentCount = incidentCountFromStats(stats.by_service, service);
 
             return {
               service,
               errorRate,
               p95Latency,
-              incidentCount: serviceStats.count || 0,
-              hasCritical: stats.by_service?.[service]?.critical > 0,
-              hasWarning: (serviceStats.count || 0) > 0,
+              incidentCount,
+              hasCritical: false,
+              hasWarning: incidentCount > 0,
             };
           })
         );
 
-        if (mounted) {
+        if (!controller.signal.aborted) {
           setServices(servicesData);
           setLoading(false);
         }
       } catch (err) {
-        console.error('Failed to fetch service health:', err);
-        if (mounted) setLoading(false);
+        if (!isRequestAborted(err)) {
+          console.error('Failed to fetch service health:', err);
+        }
+        if (!controller.signal.aborted) setLoading(false);
       }
     }
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
-
+    const interval = setInterval(fetchData, 30000);
     return () => {
-      mounted = false;
+      controller.abort();
       clearInterval(interval);
     };
   }, []);

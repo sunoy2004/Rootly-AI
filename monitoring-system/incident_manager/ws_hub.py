@@ -29,9 +29,6 @@ class EventBroadcaster:
                 dead.add(ws)
         clients -= dead
 
-    async def broadcast_logs(self, logs: list):
-        await self._send(self.log_clients, {"type": "logs", "logs": logs})
-
     async def broadcast_anomaly(self, anomaly: dict):
         await self._send(self.anomaly_clients, {"type": "anomaly", "anomaly": anomaly})
 
@@ -53,13 +50,20 @@ async def _logs_loop(websocket: WebSocket, service: str, level: str, search: str
             except asyncio.TimeoutError:
                 pass
 
-            logs = await search_logs(
-                service=service or None,
-                level=level or None,
-                search_text=search or None,
-                limit=100,
-            )
+            try:
+                logs = await asyncio.wait_for(
+                    search_logs(
+                        service=service or None,
+                        level=level or None,
+                        search_text=search or None,
+                        limit=50,
+                    ),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logs = []
             await websocket.send_json({"type": "logs", "logs": logs})
+            logger.debug(f"WS /ws/logs sent {len(logs)} logs service={service}")
             await asyncio.sleep(2)
         except WebSocketDisconnect:
             raise
@@ -73,8 +77,16 @@ async def ws_logs(websocket: WebSocket):
     await websocket.accept()
     broadcaster.log_clients.add(websocket)
     logger.info("WS client connected: /ws/logs")
+    service, level, search = "user-service", "", ""
     try:
-        await _logs_loop(websocket, "user-service", "", "")
+        try:
+            init = await asyncio.wait_for(websocket.receive_json(), timeout=2.0)
+            service = init.get("service", service)
+            level = init.get("level", level)
+            search = init.get("search", search)
+        except (asyncio.TimeoutError, WebSocketDisconnect):
+            pass
+        await _logs_loop(websocket, service, level, search)
     except WebSocketDisconnect:
         pass
     finally:
@@ -94,7 +106,7 @@ async def ws_anomalies(websocket: WebSocket):
     logger.info("WS client connected: /ws/anomalies")
     try:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
     except WebSocketDisconnect:
         pass
     finally:
@@ -108,7 +120,7 @@ async def ws_incidents(websocket: WebSocket):
     logger.info("WS client connected: /ws/incidents")
     try:
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
     except WebSocketDisconnect:
         pass
     finally:

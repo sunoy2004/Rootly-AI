@@ -19,6 +19,86 @@ CLUSTERING_ENGINE_URL = os.getenv("CLUSTERING_ENGINE_URL", "http://clustering-en
 ANOMALY_ENGINE_URL = os.getenv("ANOMALY_ENGINE_URL", "http://anomaly-engine:8004")
 JAEGER_URL = os.getenv("JAEGER_URL", "http://jaeger:16686")
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
+PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+
+
+def _parse_ai_analysis(row: dict) -> dict:
+    ai = dict(row)
+    for key, value in list(ai.items()):
+        if hasattr(value, "isoformat"):
+            ai[key] = value.isoformat()
+    raw = ai.get("raw_response")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = {}
+    if isinstance(raw, dict):
+        debug = raw.get("debug_steps", [])
+        actions = raw.get("recommended_actions", [])
+        action_set = {str(a).lower() for a in actions}
+        ai.setdefault("debug_steps", [s for s in debug if str(s).lower() not in action_set])
+        ai.setdefault("evidence", raw.get("evidence", []))
+        ai.setdefault("recommended_actions", actions)
+        ai.setdefault("summary", raw.get("summary", ai.get("summary", "")))
+        if not ai.get("root_cause"):
+            ai["root_cause"] = raw.get("root_cause", "")
+    return ai
+
+
+async def _fetch_service_metrics(service: str, pg_pool: asyncpg.Pool) -> dict:
+    queries = {
+        "error_rate": (
+            f'sum(rate(http_requests_total{{job="{service}",status=~"5.."}}[5m]))'
+            f' / sum(rate(http_requests_total{{job="{service}"}}[5m]))'
+        ),
+        "p95_latency_ms": (
+            f'histogram_quantile(0.95, '
+            f'sum(rate(http_request_duration_seconds_bucket{{job="{service}"}}[5m])) by (le)) * 1000'
+        ),
+        "db_errors": f'sum(rate(db_connection_errors_total{{service="{service}"}}[5m]))',
+        "gateway_timeouts": f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))',
+    }
+    metrics = {}
+    async with httpx.AsyncClient(timeout=5.0) as prom:
+        for key, query in queries.items():
+            try:
+                resp = await prom.get(
+                    f"{PROMETHEUS_URL}/api/v1/query",
+                    params={"query": query},
+                )
+                results = resp.json().get("data", {}).get("result", [])
+                if results:
+                    val = float(results[0]["value"][1])
+                    if val == val:  # not NaN
+                        metrics[key] = val
+            except Exception:
+                pass
+
+    async with pg_pool.acquire() as conn:
+        anomaly = await conn.fetchrow(
+            """
+            SELECT metric, current_value, z_score, severity
+            FROM anomalies WHERE service = $1
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            service,
+        )
+        if anomaly:
+            metric = anomaly["metric"]
+            value = float(anomaly["current_value"] or 0)
+            if metric == "p95_latency_ms" and metrics.get("p95_latency_ms", 0) == 0:
+                metrics["p95_latency_ms"] = value
+            elif metric == "error_rate" and metrics.get("error_rate", 0) == 0:
+                metrics["error_rate"] = value
+            elif metric == "db_errors" and metrics.get("db_errors", 0) == 0:
+                metrics["db_errors"] = value
+            elif metric == "gateway_timeouts" and metrics.get("gateway_timeouts", 0) == 0:
+                metrics["gateway_timeouts"] = value
+
+    for key in ("error_rate", "p95_latency_ms", "db_errors", "gateway_timeouts"):
+        metrics.setdefault(key, 0.0)
+    return metrics
 
 
 def get_manager() -> IncidentManager:
@@ -134,13 +214,46 @@ async def get_incident(
             service,
         )
 
-    error_logs = await search_logs(service=service, level="ERROR", limit=20)
+    error_logs_raw = await search_logs(service=service, level="ERROR", limit=20)
+    if not error_logs_raw:
+        error_logs_raw = await search_logs(service=service, limit=20)
+
+    error_logs = [
+        f"[{log.get('level', 'INFO')}] {log.get('endpoint', '')} "
+        f"{log.get('status_code', '')} {log.get('latency_ms', '')}ms "
+        f"{log.get('message', '')} trace={log.get('trace_id', '')}"
+        for log in error_logs_raw
+    ]
+
+    ai_analysis = None
+    async with pg_pool.acquire() as conn:
+        ai_row = await conn.fetchrow(
+            "SELECT * FROM ai_analyses WHERE incident_id = $1 ORDER BY created_at DESC LIMIT 1",
+            incident_id,
+        )
+        if ai_row:
+            ai_analysis = _parse_ai_analysis(dict(ai_row))
+
+    metrics = await _fetch_service_metrics(service, pg_pool) if service else {}
+
+    incident_dict.update(metrics)
+    if ai_analysis:
+        incident_dict["ai_analysis"] = ai_analysis
+        incident_dict["evidence"] = ai_analysis.get("evidence") or []
+        incident_dict["debug_steps"] = ai_analysis.get("debug_steps") or []
+        incident_dict["recommended_actions"] = ai_analysis.get("recommended_actions") or []
+        incident_dict["summary"] = ai_analysis.get("summary") or ""
+        if not incident_dict.get("root_cause"):
+            incident_dict["root_cause"] = ai_analysis.get("root_cause")
 
     return {
         "incident": incident_dict,
         "cluster": cluster,
-        "error_logs": [log.get("message", "") for log in error_logs],
+        "error_logs": error_logs,
+        "error_logs_raw": error_logs_raw,
         "recent_anomalies": [dict(a) for a in anomalies],
+        "ai_analysis": ai_analysis,
+        "metrics": metrics,
     }
 
 
@@ -252,18 +365,68 @@ async def get_clusters(
     status: str = Query("open"),
     limit: int = Query(20),
     user: str = Depends(get_current_user),
+    pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(
-                f"{CLUSTERING_ENGINE_URL}/clusters",
-                params={"status": status, "limit": limit},
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            return []
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id, representative_message, member_count, affected_services,
+                   status, first_seen, last_seen
+            FROM failure_clusters
+            WHERE status = $1
+            ORDER BY last_seen DESC
+            LIMIT $2
+            """,
+            status,
+            limit,
+        )
+    results = []
+    for row in rows:
+        r = dict(row)
+        results.append({
+            "id": str(r["id"]),
+            "representative_message": r.get("representative_message", ""),
+            "member_count": r.get("member_count", 0),
+            "affected_services": r.get("affected_services") or [],
+            "status": r.get("status", status),
+            "first_seen": r["first_seen"].isoformat() if r.get("first_seen") else None,
+            "last_seen": r["last_seen"].isoformat() if r.get("last_seen") else None,
+        })
+    return results
+
+
+@router.get("/logs")
+async def get_all_logs(
+    service: Optional[str] = Query(None),
+    level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(100, le=500),
+    user: str = Depends(get_current_user),
+):
+    svc = None if not service or service in ("all", "*") else service
+    logs = await search_logs(service=svc, level=level, search_text=search, limit=limit)
+    import logging
+    logging.getLogger(__name__).info(
+        f"GET /logs service={svc} level={level} returned {len(logs)} logs"
+    )
+    return logs
+
+
+@router.get("/logs/service/{service_name}")
+async def get_logs_by_service(
+    service_name: str,
+    level: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(100, le=500),
+    user: str = Depends(get_current_user),
+):
+    logs = await search_logs(
+        service=service_name,
+        level=level,
+        search_text=search,
+        limit=limit,
+    )
+    return logs
 
 
 @router.get("/services/{service_name}/logs")

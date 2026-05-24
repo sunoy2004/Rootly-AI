@@ -80,10 +80,17 @@ Respond ONLY with this JSON:
   "severity": "WARNING or CRITICAL",
   "confidence": 0.0,
   "affected_services": ["service-a"],
-  "recommended_actions": ["action1", "action2"],
-  "summary": "2-3 sentence summary",
-  "evidence": ["point1", "point2"]
-}}"""
+  "summary": "2-3 sentence problem description",
+  "debug_steps": ["investigate: check X", "investigate: verify Y"],
+  "recommended_actions": ["remediate: do A", "remediate: do B"],
+  "evidence": ["metric/log evidence 1", "evidence 2"]
+}}
+
+Rules:
+- debug_steps = investigative actions only (inspect traces, check metrics, verify dependencies)
+- recommended_actions = remediation only (scale, restart, tune timeouts, enable fallback)
+- Do NOT duplicate the same text across debug_steps and recommended_actions
+- Do NOT include a possible_causes field"""
 
 BATCH_PROMPT = ChatPromptTemplate.from_messages(
     [
