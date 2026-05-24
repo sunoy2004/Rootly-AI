@@ -183,3 +183,85 @@ services:
         condition: service_healthy
     networks:
       - monitoring-net
+
+  anomaly-engine:
+    build: ./anomaly_engine
+    ports:
+      - "8004:8004"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+      es-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+
+  rule-engine:
+    build: ./rule_engine
+    ports:
+      - "8005:8005"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      prometheus:
+        condition: service_started
+    networks:
+      - monitoring-net
+
+  clustering-engine:
+    build: ./clustering_engine
+    ports:
+      - "8006:8006"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      es-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+
+  incident-manager:
+    build: ./incident_manager
+    ports:
+      - "8013:8007"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      es-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+
+  ai-agent:
+    build: ./ai_agent
+    ports:
+      - "8008:8008"
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+      elasticsearch:
+        condition: service_healthy
+      es-init:
+        condition: service_completed_successfully
+    networks:
+      - monitoring-net
+

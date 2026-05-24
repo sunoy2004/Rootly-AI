@@ -29,7 +29,7 @@ monitoring-system/
 ├── clustering_engine/           # Clusters Elasticsearch logs using FAISS and sentence-transformers
 ├── incident_manager/            # Manages incident lifecycle (DB writes, state transitions, escalations)
 ├── ai_agent/                    # LLM RAG agent analyzing telemetry (traces, metrics, logs) for root causes
-├── alert_system/                # Alert deduplication and notification dispatcher (Slack, Email)
+├── alert_system/                # (SKIPPED FOR NOW) Alert deduplication and notification dispatcher
 └── dashboard/                   # React (Vite) single-page application dashboard
 ```
 
@@ -108,10 +108,7 @@ flowchart TD
     end
 
     subgraph Notification
-        T[Alert System] -- Subscribes --> P
-        T --> U{Alert Dedup}
-        U -->|Send| V[Slack Webhook / Email SMTP]
-        V -->|Mark alert_sent| H
+        T[Dashboard] -- Fetches Incidents --> H
     end
     
     subgraph Clustering
@@ -140,8 +137,8 @@ sequenceDiagram
     participant ES as Elasticsearch
     participant JG as Jaeger
     participant CH as Chroma DB
-    participant AS as Alert System
     participant DB as Postgres/Redis
+    participant UI as Dashboard
 
     AE->>DB: Check Redis deduplication key
     alt Is Not Deduplicated
@@ -173,102 +170,66 @@ sequenceDiagram
         AI->>DB: Publish enriched incident to incidents_to_alert
     end
 
-    AS->>DB: Subscribes & receives incidents_to_alert
-    AS->>AS: Check alert deduplication rules
-    alt Alert Approved
-        AS->>AS: Dispatch Slack Webhook / Email SMTP
-        AS->>DB: Update incident alert_sent = TRUE in PostgreSQL
-    end
+    UI->>DB: Fetch/Poll Incidents via API
+    UI->>UI: Display Incident & Root Cause to User
 ```
 
 ---
 
 ## 6. How to Run Each Service
 
-Follow this guide to get all components running locally.
+Follow this guide to get all backend components running in Docker.
 
-### Step 1: Clone & Configure Environments
+### Step 1: Configure Environments
 Copy the template configuration file `.env.example` in the directory root to `.env`:
 ```powershell
 cp .env.example .env
 ```
 Ensure you update keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `SLACK_WEBHOOK_URL`, or SMTP settings in `.env` if you want to test AI diagnostics and alert dispatches.
 
-### Step 2: Spin Up Infrastructure and Monitored Applications
-Launch the background containers:
+### Step 2: Spin Up All Services in Docker
+Build and launch all background infrastructure, monitored apps, and AI/operations engines using a single command:
 ```powershell
-docker-compose up -d
+docker compose up -d --build
 ```
 This command builds and runs:
-- Databases: `postgres`, `redis`, `elasticsearch`, `chromadb`
-- Monitors: `prometheus`, `grafana`, `jaeger`, `fluent-bit`
-- Monitored Services: `user-service`, `order-service`, `payment-service`
-- Initialization Hook: `es-init` (terminates once database schemas and templates are set up)
+- **Databases**: `postgres` (port 5432), `redis` (port 6379), `elasticsearch` (port 9200), `chromadb` (port 8005)
+- **Monitors & Shipping**: `prometheus` (port 9090), `grafana` (port 3001), `jaeger` (port 16686/4317), `fluent-bit`
+- **Monitored Services**: `user-service` (port 8001), `order-service` (port 8002), `payment-service` (port 8003)
+- **Database Initializer**: `es-init` (sets up Elasticsearch index mappings and PostgreSQL schema)
+- **AI & Operations Services**:
+  - `anomaly-engine` (port 8004): Runs metric anomaly detectors (Z-Score & Isolation Forest)
+  - `rule-engine` (port 8005): Evaluates metric alerts against deterministic rules
+  - `clustering-engine` (port 8006): Clusters application error logs using SentenceTransformers & FAISS
+  - `incident-manager` (port 8013/8007): Tracks incidents, routes to AI, manages transitions and escalations
+  - `ai-agent` (port 8008): Queries logs/traces/memory and calls LLMs for root cause diagnosis
+  - *(Note: `alert-system` is skipped for this phase)*
 
-Confirm they are active by executing:
+Confirm all services are active and healthy:
 ```powershell
-docker-compose ps
+docker compose ps
 ```
 
-### Step 3: Run the Operations and AI Services
-Each engine is designed to run using virtual environments or directly via a Python interpreter. In separate terminal windows, run the services in the following order:
-
-1.  **Anomaly Engine** (Port `8004`):
-    ```powershell
-    cd anomaly_engine
-    pip install -r requirements.txt
-    python main.py
-    ```
-2.  **Rule Engine** (Port `8005`):
-    ```powershell
-    cd rule_engine
-    pip install -r requirements.txt
-    python main.py
-    ```
-3.  **Clustering Engine** (Port `8006`):
-    ```powershell
-    cd clustering_engine
-    pip install -r requirements.txt
-    python main.py
-    ```
-4.  **Incident Manager** (Port `8007`):
-    ```powershell
-    cd incident_manager
-    pip install -r requirements.txt
-    python main.py
-    ```
-5.  **AI Agent** (Port `8008`):
-    ```powershell
-    cd ai_agent
-    pip install -r requirements.txt
-    python main.py
-    ```
-6.  **Alert System** (Port `8009`):
-    ```powershell
-    cd alert_system
-    pip install -r requirements.txt
-    python main.py
-    ```
-
-### Step 4: Run the Traffic Simulator
-To feed the metrics and logs pipelines with synthetic data, execute the load generator:
+### Step 3: Run the Traffic Simulator
+To feed the metrics and logs pipelines with synthetic traffic data, run the simulator locally on your host:
 ```powershell
 cd services
 python load_simulator.py
 ```
 
-### Step 5: Start the Dashboard
-To start the React frontend dashboard:
+### Step 4: Start the Dashboard
+To start the React frontend dashboard locally:
 ```powershell
 cd dashboard
 npm install
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) (or the port Vite outputs) in your browser. Log in with the administrative credentials:
+Open [http://localhost:5173](http://localhost:5173) in your browser. Log in with the administrative credentials:
 *   **Username**: `admin`
 *   **Password**: `admin123`
 
 ---
+
 
 ## 7. Operational Algorithms
 
@@ -300,3 +261,36 @@ When an incident is routed to the AI Agent:
 2.  **Telemetry Fetch**: Aggregates Elasticsearch query counts, Prometheus metrics, and Jaeger spans (identifying the slowest child span, the first span flagging an error, and the call chain sequence).
 3.  **Prompt & Classify**: Passes JSON arrays to the LLM. The model output is parsed to populate incident diagnostics, confidence scores, and remediation steps.
 4.  **Memorize**: When an operator notes an incident as resolved via the API, the title, root cause, and resolution notes are combined, embedded, and added to the Chroma DB vector store.
+
+---
+
+## 8. Division of Labor & Branching Strategy
+
+Given the 8-hour submission deadline, development is split between API/Infrastructure and AI pipelines, while future features (like the Slack/Email Alert System) are skipped.
+
+### Person A: API, Infrastructure & Frontend Focus
+*Goal: Ensure data is generated, stored, and visible.*
+*   **Branches**: `feature/api-dashboard` (branched from `development`)
+*   **Modules**: `/services`, `/dashboard`, `/incident_manager`, and `/collector`
+*   **Focus**: 
+    *   Build out React dashboard views to display incidents.
+    *   Ensure User, Order, Payment services and Load Simulator run properly.
+    *   Finalize Incident Manager APIs for the dashboard.
+    *   Validate core infra (PostgreSQL, Elasticsearch, Redis, Prometheus, Grafana, Jaeger).
+
+### Person B: AI & Data Pipeline Focus
+*Goal: Ensure anomalies are detected, clustered, and diagnosed by the LLM.*
+*   **Branches**: `feature/ai-pipeline` (branched from `development`)
+*   **Modules**: `/anomaly_engine`, `/clustering_engine`, `/rule_engine`, and `/ai_agent`
+*   **Focus**:
+    *   Ensure Anomaly Engine successfully detects and writes events.
+    *   Set up Clustering Engine with FAISS for grouping Elasticsearch errors.
+    *   Finalize AI Agent RAG pipeline (fetching Chroma DB, parsing logs, and writing root causes to DB).
+    *   Implement complex rule engine logic (routing deterministic anomalies or sending to AI agent).
+
+### Workflow Strategy
+1.  **`main` Branch**: Production-ready code for final submission.
+2.  **`development` Branch**: The primary integration branch.
+3.  Both developers work isolated on their `feature/*` branches.
+4.  Test endpoints using mock data if the dependent service isn't ready.
+5.  Open Pull Requests to `development` for end-to-end integration testing before the final merge to `main`.
