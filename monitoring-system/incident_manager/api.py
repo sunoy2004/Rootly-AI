@@ -243,3 +243,41 @@ async def get_clusters(
             params={"status": status, "limit": limit},
         )
         return resp.json()
+
+
+@router.get("/services/{service_name}/logs")
+async def get_service_logs(
+    service_name: str,
+    level: Optional[str] = Query(None),
+    limit: int = Query(50, le=200),
+    user: str = Depends(get_current_user),
+):
+    query_str = f"service:{service_name}"
+    if level:
+        query_str += f" AND level:{level}"
+
+    logs = []
+    async with httpx.AsyncClient() as client:
+        try:
+            es_resp = await client.get(
+                f"{ES_URL}/api-logs-*/_search",
+                params={
+                    "q": query_str,
+                    "size": limit,
+                    "sort": "@timestamp:desc",
+                },
+            )
+            es_data = es_resp.json()
+            for hit in es_data.get("hits", {}).get("hits", []):
+                src = hit.get("_source", {})
+                logs.append({
+                    "timestamp": src.get("@timestamp"),
+                    "level": src.get("level", "INFO"),
+                    "message": src.get("message", ""),
+                    "trace_id": src.get("trace_id", "")
+                })
+        except Exception as e:
+            # Fallback or empty if Elasticsearch isn't fully ready yet to prevent crash
+            pass
+
+    return logs

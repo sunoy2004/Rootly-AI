@@ -3,6 +3,7 @@ import ServiceHealthGrid from '../components/ServiceHealthGrid';
 import MetricsPanel from '../components/MetricsPanel';
 import IncidentList from '../components/IncidentList';
 import ClusterView from '../components/ClusterView';
+import LogViewer from '../components/LogViewer';
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -140,6 +141,20 @@ export default function Dashboard() {
               <ClusterView />
             </div>
           </div>
+        </section>
+
+        {/* Section 4: Live Log Viewer */}
+        <section style={{ marginTop: 32 }}>
+          <h2
+            style={{
+              color: '#e8eaf0',
+              fontSize: 18,
+              marginBottom: 16,
+            }}
+          >
+            Live Log Viewer
+          </h2>
+          <LogViewer />
         </section>
       </div>
     </div>

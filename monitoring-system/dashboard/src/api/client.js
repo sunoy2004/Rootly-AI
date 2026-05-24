@@ -82,6 +82,11 @@ export async function getClusters(params = {}) {
   return response.data;
 }
 
+export async function getServiceLogs(serviceName, params = {}) {
+  const response = await incidentAPI.get(`/services/${serviceName}/logs`, { params });
+  return response.data;
+}
+
 export async function getMetricRange(promql, startMinutesAgo = 30, stepSeconds = 60) {
   const end = Math.floor(Date.now() / 1000);
   const start = end - startMinutesAgo * 60;
