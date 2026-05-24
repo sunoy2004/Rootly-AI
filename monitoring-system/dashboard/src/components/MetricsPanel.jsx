@@ -12,14 +12,14 @@ import {
 import { getMetricRange } from '../api/client';
 
 const SERVICES = ['user-service', 'order-service', 'payment-service'];
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b'];
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b']; // Blue, Green, Amber
 
 function formatTime(timestamp) {
   const date = new Date(timestamp * 1000);
-  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 }
 
-function ChartCard({ title, data, loading }) {
+function ChartCard({ title, data, loading, valueFormatter, strokeWidth = 2.5 }) {
   const seriesByService = {};
   const timeSet = new Set();
 
@@ -34,9 +34,8 @@ function ChartCard({ title, data, loading }) {
   const times = Array.from(timeSet).sort((a, b) => a - b);
   const chartData = times.map((t) => {
     const row = { time: formatTime(t) };
-    SERVICES.forEach((svc, idx) => {
-      const serviceName = svc;
-      row[serviceName] = seriesByService[serviceName]?.[t] ?? null;
+    SERVICES.forEach((svc) => {
+      row[svc] = seriesByService[svc]?.[t] !== undefined ? seriesByService[svc][t] : 0.0;
     });
     return row;
   });
@@ -44,42 +43,54 @@ function ChartCard({ title, data, loading }) {
   return (
     <div
       style={{
-        backgroundColor: '#1a1d27',
-        border: '1px solid #2a2d3a',
-        borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
+        background: 'linear-gradient(135deg, rgba(26, 29, 39, 0.6) 0%, rgba(20, 22, 30, 0.7) 100%)',
+        backdropFilter: 'blur(8px)',
+        border: '1px solid rgba(255, 255, 255, 0.05)',
+        borderRadius: 16,
+        padding: 20,
+        marginBottom: 20,
+        boxShadow: '0 4px 20px 0 rgba(0, 0, 0, 0.2)',
       }}
     >
-      <h4 style={{ color: '#e8eaf0', margin: '0 0 16px 0' }}>{title}</h4>
-      {loading ? (
-        <div style={{ color: '#8b8fa8', textAlign: 'center', padding: 40 }}>
-          Loading...
+      <h4 style={{ color: '#e8eaf0', margin: '0 0 16px 0', fontSize: 15, fontWeight: 600 }}>{title}</h4>
+      {loading && chartData.length === 0 ? (
+        <div style={{ color: '#8b8fa8', textAlign: 'center', padding: '60px 0', fontSize: 13 }}>
+          Syncing metrics with Prometheus...
         </div>
       ) : chartData.length === 0 ? (
-        <div style={{ color: '#8b8fa8', textAlign: 'center', padding: 40 }}>
-          No data available
+        <div style={{ color: '#8b8fa8', textAlign: 'center', padding: '60px 0', fontSize: 13 }}>
+          0.00 (No metric activity. Run load simulator)
         </div>
       ) : (
-        <ResponsiveContainer width="100%" height={200}>
-          <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#2a2d3a" />
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={chartData} margin={{ top: 5, right: 10, left: 15, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.05)" />
             <XAxis
               dataKey="time"
               stroke="#8b8fa8"
-              fontSize={11}
+              fontSize={10}
               tickLine={false}
+              dy={10}
             />
-            <YAxis stroke="#8b8fa8" fontSize={11} tickLine={false} />
+            <YAxis 
+              stroke="#8b8fa8" 
+              fontSize={10} 
+              tickLine={false} 
+              dx={-5}
+              tickFormatter={valueFormatter}
+            />
             <Tooltip
               contentStyle={{
-                backgroundColor: '#1a1d27',
-                border: '1px solid #2a2d3a',
+                backgroundColor: '#1e222b',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
                 borderRadius: 8,
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
               }}
-              labelStyle={{ color: '#e8eaf0' }}
+              labelStyle={{ color: '#e8eaf0', fontWeight: 600, fontSize: 12 }}
+              itemStyle={{ fontSize: 12, padding: '2px 0' }}
+              formatter={(value, name) => [valueFormatter(value), name]}
             />
-            <Legend />
+            <Legend wrapperStyle={{ fontSize: 11, paddingTop: 10 }} />
             {SERVICES.map((svc, idx) => (
               <Line
                 key={svc}
@@ -87,7 +98,9 @@ function ChartCard({ title, data, loading }) {
                 dataKey={svc}
                 stroke={COLORS[idx]}
                 dot={false}
-                strokeWidth={2}
+                strokeWidth={strokeWidth}
+                activeDot={{ r: 4 }}
+                animationDuration={300}
               />
             ))}
           </LineChart>
@@ -110,13 +123,13 @@ export default function MetricsPanel() {
       try {
         const [errors, p95, volume] = await Promise.all([
           getMetricRange(
-            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"5.."}[5m])) by (job)) + (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"4.."}[5m])) by (job))'
+            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"(4xx|5xx|4..|5..)",handler!="/metrics"}[5m])) by (job)) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
           ),
           getMetricRange(
-            'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~"user-service|order-service|payment-service"}[5m])) by (le, job)) * 1000'
+            '(histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (le, job)) * 1000) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
           ),
           getMetricRange(
-            'sum(rate(http_requests_total{job=~"user-service|order-service|payment-service"}[5m])) by (job)'
+            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job)) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
           ),
         ]);
 
@@ -132,21 +145,35 @@ export default function MetricsPanel() {
       }
     }
 
-    const start = setTimeout(fetchData, 2500);
-    const interval = setInterval(fetchData, 45000);
+    fetchData(); // Fetch immediately
+    const interval = setInterval(fetchData, 5000); // Poll every 5s
 
     return () => {
       mounted = false;
-      clearTimeout(start);
       clearInterval(interval);
     };
   }, []);
 
   return (
-    <div>
-      <ChartCard title="Error Rate (4xx+5xx / sec by service)" data={errorRateData} loading={loading} />
-      <ChartCard title="p95 Latency (ms)" data={p95Data} loading={loading} />
-      <ChartCard title="Request Volume (req/sec)" data={volumeData} loading={loading} />
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+      <ChartCard 
+        title="Error Rate (errors/sec)" 
+        data={errorRateData} 
+        loading={loading} 
+        valueFormatter={(val) => `${val.toFixed(2)}/s`}
+      />
+      <ChartCard 
+        title="Latency p95 (ms)" 
+        data={p95Data} 
+        loading={loading} 
+        valueFormatter={(val) => `${val.toFixed(0)} ms`}
+      />
+      <ChartCard 
+        title="Throughput (req/sec)" 
+        data={volumeData} 
+        loading={loading} 
+        valueFormatter={(val) => `${val.toFixed(1)}/s`}
+      />
     </div>
   );
 }

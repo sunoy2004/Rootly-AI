@@ -64,14 +64,14 @@ class PrometheusClient:
         job_name = service
 
         error_rate_expr = (
-            f'sum(rate(http_requests_total{{job="{job_name}",status=~"5.."}}[5m]))'
-            f' / sum(rate(http_requests_total{{job="{job_name}"}}[5m]))'
+            f'sum(rate(http_requests_total{{job="{job_name}",status=~"(5..|5xx)",handler!="/metrics"}}[5m]))'
+            f' / clamp_min(sum(rate(http_requests_total{{job="{job_name}",handler!="/metrics"}}[5m])), 0.001)'
         )
         p95_latency_expr = (
             f'histogram_quantile(0.95, '
-            f'sum(rate(http_request_duration_seconds_bucket{{job="{job_name}"}}[5m])) by (le)) * 1000'
+            f'sum(rate(http_request_duration_seconds_bucket{{job="{job_name}",handler!="/metrics"}}[5m])) by (le)) * 1000'
         )
-        request_volume_expr = f'sum(rate(http_requests_total{{job="{job_name}"}}[5m]))'
+        request_volume_expr = f'sum(rate(http_requests_total{{job="{job_name}",handler!="/metrics"}}[5m]))'
         db_errors_expr = f'sum(rate(db_connection_errors_total{{service="{service}"}}[5m]))'
         gateway_timeouts_expr = (
             f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))'

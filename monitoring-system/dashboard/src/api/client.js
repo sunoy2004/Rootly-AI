@@ -12,8 +12,15 @@ export const incidentAPI = axios.create({
 });
 
 export const prometheusAPI = axios.create({
-  baseURL: PROMETHEUS_BASE,
-  timeout: 12000,
+  baseURL: `${API_BASE}/prometheus`,
+  timeout: 15000,
+});
+
+prometheusAPI.interceptors.request.use((config) => {
+  if (authHeader.Authorization) {
+    config.headers.Authorization = authHeader.Authorization;
+  }
+  return config;
 });
 
 export async function checkBackendHealth() {
@@ -152,9 +159,10 @@ export function connectWebSocket(path, { onMessage, onError, onOpen }) {
   };
 }
 
-export function connectLiveLogs({ service, level, search, onLogs, onError }) {
+export function connectLiveLogs({ service, level, search, onLogs, onError, onConnect }) {
   const conn = connectWebSocket('/ws/logs', {
     onOpen: (ws) => {
+      onConnect?.();
       ws.send(JSON.stringify({ service, level: level || '', search: search || '' }));
     },
     onMessage: (data) => {
@@ -166,8 +174,12 @@ export function connectLiveLogs({ service, level, search, onLogs, onError }) {
   });
 
   return {
-    sendFilters: () =>
-      conn.send({ service, level: level || '', search: search || '' }),
+    sendFilters: (newFilters) =>
+      conn.send({
+        service: newFilters.service,
+        level: newFilters.level || '',
+        search: newFilters.search || '',
+      }),
     close: conn.close,
   };
 }

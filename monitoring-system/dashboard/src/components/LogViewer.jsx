@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { getLogs } from '../api/client';
+import { connectLiveLogs } from '../api/client';
 
 const SERVICES = [
   { value: 'all', label: 'All Services' },
@@ -36,40 +36,34 @@ export default function LogViewer() {
   const [error, setError] = useState(null);
   const logContainerRef = useRef(null);
 
-  const fetchLogs = useCallback(async () => {
+  useEffect(() => {
     if (paused) return;
     setLoading(true);
-    setError(null);
-    try {
-      const params = { limit: 150 };
-      if (selectedService && selectedService !== 'all') {
-        params.service = selectedService;
-      }
-      if (selectedLevel) params.level = selectedLevel;
-      if (searchText) params.search = searchText;
-      const data = await getLogs(params);
-      const list = Array.isArray(data) ? data : [];
-      list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-      setLogs(list);
-    } catch (err) {
-      const msg = err.code === 'ECONNABORTED' || err.message?.includes('timeout')
-        ? 'Log request timed out — showing partial results. Try filtering to one service.'
-        : 'Failed to load logs. Is incident-manager running on port 8013?';
-      setError(msg);
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedService, selectedLevel, searchText, paused]);
 
-  useEffect(() => {
-    const start = setTimeout(fetchLogs, 1500);
-    const interval = setInterval(fetchLogs, 5000);
+    const conn = connectLiveLogs({
+      service: selectedService === 'all' ? '' : selectedService,
+      level: selectedLevel,
+      search: searchText,
+      onConnect: () => {
+        setError(null);
+      },
+      onLogs: (newLogs) => {
+        console.log("frontend received log event", newLogs);
+        setLogs(newLogs);
+        setError(null);
+        setLoading(false);
+      },
+      onError: (err) => {
+        console.error("WS logs error:", err);
+        setError("WebSocket connection failed. Retrying...");
+        setLoading(false);
+      }
+    });
+
     return () => {
-      clearTimeout(start);
-      clearInterval(interval);
+      conn.close();
     };
-  }, [fetchLogs]);
+  }, [selectedService, selectedLevel, searchText, paused]);
 
   useEffect(() => {
     if (!autoScroll || paused || !logContainerRef.current) return;
@@ -89,14 +83,18 @@ export default function LogViewer() {
     return true;
   });
 
+  console.log(`rendering ${displayLogs.length} logs`);
+
   return (
     <div
       style={{
-        backgroundColor: '#161922',
-        border: '1px solid #2a2d3a',
-        borderRadius: 12,
-        padding: 20,
+        background: 'linear-gradient(135deg, rgba(22, 25, 34, 0.7) 0%, rgba(15, 17, 23, 0.8) 100%)',
+        backdropFilter: 'blur(12px)',
+        border: '1px solid rgba(255, 255, 255, 0.08)',
+        borderRadius: 16,
+        padding: 24,
         color: '#e8eaf0',
+        boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
@@ -125,20 +123,17 @@ export default function LogViewer() {
             style={{ ...selectStyle, minWidth: 180 }}
           />
         </div>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center', fontSize: 13, color: '#8b8fa8' }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', fontSize: 13, color: '#8b8fa8' }}>
           <label style={labelStyle}>
-            <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
+            <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} style={checkboxStyle} />
             Auto-scroll
           </label>
           <label style={labelStyle}>
-            <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} />
+            <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} style={checkboxStyle} />
             Pause
           </label>
           <button type="button" onClick={() => setLogs([])} style={btnStyle}>
             Clear
-          </button>
-          <button type="button" onClick={fetchLogs} style={btnStyle}>
-            Refresh
           </button>
           <span>{displayLogs.length} lines</span>
         </div>
@@ -150,10 +145,13 @@ export default function LogViewer() {
 
       <div ref={logContainerRef} style={logPanelStyle}>
         {loading && displayLogs.length === 0 ? (
-          <div style={{ color: '#8b8fa8' }}>Fetching logs from Elasticsearch...</div>
+          <div style={{ color: '#8b8fa8', display: 'flex', alignItems: 'center', gap: 8, padding: 12 }}>
+            <div className="spinner" />
+            <span>Streaming logs from Elasticsearch...</span>
+          </div>
         ) : displayLogs.length === 0 ? (
-          <div style={{ color: '#8b8fa8' }}>
-            No logs found. Run load simulator, wait ~10s for Fluent Bit, then click Refresh. Try a single service filter.
+          <div style={{ color: '#8b8fa8', padding: 12 }}>
+            No logs found. Start the load simulator to see live events streaming here.
           </div>
         ) : (
           displayLogs.map((log, i) => (
@@ -161,30 +159,50 @@ export default function LogViewer() {
               key={`${log.timestamp}-${log.service}-${i}`}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '90px 110px 70px 1fr',
-                gap: 8,
-                padding: '4px 0',
-                borderBottom: '1px solid #11141a',
+                gridTemplateColumns: '100px 130px 80px 1fr',
+                gap: 12,
+                padding: '8px 12px',
+                borderBottom: '1px solid rgba(255, 255, 255, 0.03)',
                 fontSize: 12,
                 alignItems: 'start',
+                transition: 'background-color 0.2s',
+                borderRadius: 4,
               }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.02)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
             >
-              <span style={{ color: '#5c6370' }}>
+              <span style={{ color: '#636d83', fontFamily: 'monospace' }}>
                 {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
               </span>
-              <span style={{ color: '#c678dd' }}>{log.service || '—'}</span>
+              <span style={{ color: '#c678dd', fontWeight: 500 }}>{log.service || '—'}</span>
               <span style={{ color: getLevelColor(log.level), fontWeight: 600 }}>{log.level}</span>
               <div>
-                {log.endpoint && <span style={{ color: '#98c379', marginRight: 8 }}>{log.endpoint}</span>}
-                {log.status_code > 0 && <span style={{ color: '#d19a66', marginRight: 8 }}>{log.status_code}</span>}
-                {log.latency_ms > 0 && <span style={{ color: '#d19a66', marginRight: 8 }}>{Math.round(log.latency_ms)}ms</span>}
-                <span style={{ color: '#abb2bf' }}>{log.message}</span>
+                {log.endpoint && <span style={{ color: '#98c379', marginRight: 8, fontFamily: 'monospace' }}>{log.endpoint}</span>}
+                {log.status_code > 0 && (
+                  <span
+                    style={{
+                      color: log.status_code >= 400 ? '#ef4444' : '#d19a66',
+                      marginRight: 8,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {log.status_code}
+                  </span>
+                )}
+                {log.latency_ms > 0 && <span style={{ color: '#56b6c2', marginRight: 8 }}>{Math.round(log.latency_ms)}ms</span>}
+                <span style={{ color: '#abb2bf', wordBreak: 'break-all' }}>{log.message}</span>
                 {log.trace_id && (
                   <a
                     href={`http://localhost:16686/trace/${log.trace_id}`}
                     target="_blank"
                     rel="noreferrer"
-                    style={{ color: '#56b6c2', marginLeft: 8 }}
+                    style={{
+                      color: '#61afef',
+                      marginLeft: 8,
+                      textDecoration: 'none',
+                      borderBottom: '1px dashed #61afef',
+                      fontSize: 11,
+                    }}
                   >
                     trace
                   </a>
@@ -199,33 +217,50 @@ export default function LogViewer() {
 }
 
 const selectStyle = {
-  backgroundColor: '#1a1d27',
+  backgroundColor: '#1e222b',
   color: '#e8eaf0',
-  border: '1px solid #3a3d4a',
-  borderRadius: 6,
-  padding: '8px 12px',
-  fontSize: 14,
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+  borderRadius: 8,
+  padding: '8px 16px',
+  fontSize: 13,
+  outline: 'none',
+  cursor: 'pointer',
+  transition: 'border-color 0.2s',
 };
 
-const labelStyle = { display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' };
+const labelStyle = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 8,
+  cursor: 'pointer',
+  userSelect: 'none',
+};
+
+const checkboxStyle = {
+  accentColor: '#3b82f6',
+  cursor: 'pointer',
+};
 
 const btnStyle = {
-  backgroundColor: '#2a2d3a',
+  backgroundColor: '#282c34',
   color: '#e8eaf0',
-  border: '1px solid #3a3d4a',
-  borderRadius: 6,
-  padding: '6px 10px',
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+  borderRadius: 8,
+  padding: '6px 12px',
   cursor: 'pointer',
   fontSize: 12,
+  fontWeight: 500,
+  transition: 'background-color 0.2s',
 };
 
 const logPanelStyle = {
-  backgroundColor: '#0a0c10',
-  borderRadius: 8,
-  padding: 16,
-  fontFamily: 'monospace',
-  height: 380,
+  backgroundColor: '#1e222b',
+  borderRadius: 12,
+  padding: '12px 6px',
+  fontFamily: 'Consolas, Monaco, monospace',
+  height: 400,
   overflowY: 'auto',
   overflowX: 'hidden',
-  border: '1px solid #1a1d27',
+  border: '1px solid rgba(255, 255, 255, 0.05)',
+  boxShadow: 'inset 0 4px 12px 0 rgba(0, 0, 0, 0.5)',
 };

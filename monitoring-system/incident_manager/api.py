@@ -59,13 +59,12 @@ def _parse_ai_analysis(row: dict) -> dict:
 async def _fetch_service_metrics(service: str, pg_pool: asyncpg.Pool) -> dict:
     queries = {
         "error_rate": (
-            f'(sum(rate(http_requests_total{{job="{service}",status=~"5.."}}[5m]))'
-            f' + sum(rate(http_requests_total{{job="{service}",status=~"4.."}}[5m])))'
-            f' / clamp_min(sum(rate(http_requests_total{{job="{service}"}}[5m])), 0.001)'
+            f'sum(rate(http_requests_total{{job="{service}",status=~"(4xx|5xx|4..|5..)",handler!="/metrics"}}[5m]))'
+            f' / clamp_min(sum(rate(http_requests_total{{job="{service}",handler!="/metrics"}}[5m])), 0.001)'
         ),
         "p95_latency_ms": (
             f'histogram_quantile(0.95, '
-            f'sum(rate(http_request_duration_seconds_bucket{{job="{service}"}}[5m])) by (le)) * 1000'
+            f'sum(rate(http_request_duration_seconds_bucket{{job="{service}",handler!="/metrics"}}[5m])) by (le)) * 1000'
         ),
         "db_errors": f'sum(rate(db_connection_errors_total{{service="{service}"}}[5m]))',
         "gateway_timeouts": f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))',
@@ -414,11 +413,16 @@ async def get_clusters(
     async with pg_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, representative_message, member_count, affected_services,
-                   status, first_seen, last_seen
-            FROM failure_clusters
-            WHERE status = $1
-            ORDER BY last_seen DESC
+            SELECT fc.id, fc.representative_message, fc.member_count, fc.affected_services,
+                   fc.status, fc.first_seen, fc.last_seen,
+                   COALESCE(MAX(i.severity), 'WARNING') as severity,
+                   COALESCE(AVG(i.confidence), 0.0) as confidence,
+                   COALESCE(json_agg(json_build_object('id', i.id, 'title', i.title, 'severity', i.severity)) FILTER (WHERE i.id IS NOT NULL), '[]') as related_incidents
+            FROM failure_clusters fc
+            LEFT JOIN incidents i ON i.cluster_id = fc.id
+            WHERE fc.status = $1
+            GROUP BY fc.id, fc.representative_message, fc.member_count, fc.affected_services, fc.status, fc.first_seen, fc.last_seen
+            ORDER BY fc.last_seen DESC
             LIMIT $2
             """,
             status,
@@ -427,6 +431,15 @@ async def get_clusters(
     results = []
     for row in rows:
         r = dict(row)
+        related_raw = r.get("related_incidents", "[]")
+        if isinstance(related_raw, str):
+            try:
+                related = json.loads(related_raw)
+            except Exception:
+                related = []
+        else:
+            related = related_raw
+
         results.append({
             "id": str(r["id"]),
             "representative_message": r.get("representative_message", ""),
@@ -435,6 +448,9 @@ async def get_clusters(
             "status": r.get("status", status),
             "first_seen": r["first_seen"].isoformat() if r.get("first_seen") else None,
             "last_seen": r["last_seen"].isoformat() if r.get("last_seen") else None,
+            "severity": r.get("severity", "WARNING"),
+            "confidence": float(r.get("confidence") or 0.0),
+            "related_incidents": related,
         })
 
     if not results and status == "open":
@@ -458,8 +474,56 @@ async def get_clusters(
                 "status": "open",
                 "first_seen": row["created_at"].isoformat() if row["created_at"] else None,
                 "last_seen": row["created_at"].isoformat() if row["created_at"] else None,
+                "severity": row["severity"],
+                "confidence": 0.5,
+                "related_incidents": [{"id": str(row["id"]), "title": row["title"], "severity": row["severity"]}],
             })
     return results
+
+
+@router.get("/prometheus/api/v1/query")
+async def prometheus_query(
+    query: str,
+    time: Optional[str] = None,
+    user: str = Depends(get_current_user),
+):
+    params = {"query": query}
+    if time:
+        params["time"] = time
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(f"Prometheus proxy query failed: {exc}")
+            raise HTTPException(status_code=502, detail=f"Failed to query Prometheus: {exc}")
+
+
+@router.get("/prometheus/api/v1/query_range")
+async def prometheus_query_range(
+    query: str,
+    start: str,
+    end: str,
+    step: str,
+    user: str = Depends(get_current_user),
+):
+    params = {
+        "query": query,
+        "start": start,
+        "end": end,
+        "step": step,
+    }
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            resp = await client.get(f"{PROMETHEUS_URL}/api/v1/query_range", params=params)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).error(f"Prometheus proxy query_range failed: {exc}")
+            raise HTTPException(status_code=502, detail=f"Failed to query Prometheus: {exc}")
 
 
 @router.get("/logs")

@@ -90,6 +90,7 @@ async def search_logs(
             data = resp.json()
             for hit in data.get("hits", {}).get("hits", []):
                 logs.append(_normalize_log(hit.get("_source", {})))
+            logger.info(f"received log from Elasticsearch: fetched {len(logs)} logs")
         except Exception as exc:
             logger.warning(f"Elasticsearch log search failed: {exc}")
 
