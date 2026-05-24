@@ -260,9 +260,13 @@ services:
 
   incident-manager:
     build: ./incident_manager
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8007", "--workers", "1", "--timeout-keep-alive", "5"]
     ports:
       - "8013:8007"
     env_file: .env
+    volumes:
+      - ./incident_manager:/app
+      - logs-volume:/logs
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8007/health')\""]
       interval: 30s

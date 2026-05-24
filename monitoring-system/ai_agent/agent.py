@@ -31,6 +31,16 @@ def _normalize_result(raw: dict, context: dict) -> Dict[str, Any]:
         if isinstance(s, str) and s.lower().strip() not in action_set
     ]
 
+    if not debug_steps:
+        svc = (affected or ["unknown"])[0] if affected else "unknown"
+        debug_steps = [
+            f"Search ERROR/WARNING logs for {svc} in Elasticsearch (last 30 min)",
+            f"Inspect Jaeger traces for {svc} — look for slow or failed spans",
+            f"Check Prometheus: error rate, p95 latency, DB errors for {svc}",
+            "Review anomaly events and metric spikes on the dashboard",
+            "Verify recent deployments or traffic pattern changes",
+        ]
+
     return {
         "root_cause": raw.get("root_cause") or raw.get("probable_cause", "Unknown"),
         "severity": raw.get("severity", "WARNING"),

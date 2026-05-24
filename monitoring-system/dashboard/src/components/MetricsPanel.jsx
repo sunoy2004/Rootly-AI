@@ -110,7 +110,7 @@ export default function MetricsPanel() {
       try {
         const [errors, p95, volume] = await Promise.all([
           getMetricRange(
-            'sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"5.."}[5m])) by (job)'
+            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"5.."}[5m])) by (job)) + (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"4.."}[5m])) by (job))'
           ),
           getMetricRange(
             'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~"user-service|order-service|payment-service"}[5m])) by (le, job)) * 1000'
@@ -132,18 +132,19 @@ export default function MetricsPanel() {
       }
     }
 
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const start = setTimeout(fetchData, 2500);
+    const interval = setInterval(fetchData, 45000);
 
     return () => {
       mounted = false;
+      clearTimeout(start);
       clearInterval(interval);
     };
   }, []);
 
   return (
     <div>
-      <ChartCard title="Error Rate (errors/sec)" data={errorRateData} loading={loading} />
+      <ChartCard title="Error Rate (4xx+5xx / sec by service)" data={errorRateData} loading={loading} />
       <ChartCard title="p95 Latency (ms)" data={p95Data} loading={loading} />
       <ChartCard title="Request Volume (req/sec)" data={volumeData} loading={loading} />
     </div>

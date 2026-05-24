@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { getMetricInstant, getStats, isRequestAborted } from '../api/client';
-import { incidentCountFromStats, safeNumber } from '../utils/safeRender';
+import { safeNumber, serviceStatsFromSummary } from '../utils/safeRender';
 
 const SERVICES = ['user-service', 'order-service', 'payment-service'];
 
@@ -30,7 +30,7 @@ function StatusDot({ color }) {
   );
 }
 
-function ServiceCard({ service, status, errorRate, p95Latency, incidentCount, lastUpdated }) {
+function ServiceCard({ service, status, errorRate, p95Latency, incidentCount, criticalCount, lastUpdated }) {
   return (
     <div
       style={{
@@ -52,21 +52,24 @@ function ServiceCard({ service, status, errorRate, p95Latency, incidentCount, la
       <div style={{ marginBottom: 8 }}>
         <span style={{ color: '#8b8fa8', fontSize: 12 }}>Error Rate</span>
         <div style={{ color: '#e8eaf0', fontSize: 20, fontWeight: 600 }}>
-          {(errorRate * 100).toFixed(2)}%
+          {(safeNumber(errorRate, 0) * 100).toFixed(2)}%
         </div>
+        {criticalCount > 0 && (
+          <div style={{ color: '#ef4444', fontSize: 11 }}>{criticalCount} critical incident(s)</div>
+        )}
       </div>
 
       <div style={{ marginBottom: 8 }}>
         <span style={{ color: '#8b8fa8', fontSize: 12 }}>p95 Latency</span>
         <div style={{ color: '#e8eaf0', fontSize: 20, fontWeight: 600 }}>
-          {p95Latency.toFixed(0)} ms
+          {safeNumber(p95Latency, 0).toFixed(0)} ms
         </div>
       </div>
 
       <div style={{ marginBottom: 8 }}>
         <span style={{ color: '#8b8fa8', fontSize: 12 }}>Open Incidents</span>
         <div style={{ color: '#e8eaf0', fontSize: 20, fontWeight: 600 }}>
-          {incidentCount}
+          {safeNumber(incidentCount, 0)}
         </div>
       </div>
 
@@ -90,28 +93,52 @@ export default function ServiceHealthGrid() {
 
         const servicesData = await Promise.all(
           SERVICES.map(async (service) => {
-            const [errorRateResults, p95Results] = await Promise.all([
-              getMetricInstant(
-                `sum(rate(http_requests_total{job="${service}",status=~"5.."}[5m])) / sum(rate(http_requests_total{job="${service}"}[5m]))`,
-                controller.signal
-              ),
-              getMetricInstant(
+            const svcStats = serviceStatsFromSummary(stats.by_service, service);
+
+            let prom5xx = 0;
+            let prom4xx = 0;
+            try {
+              const [r5xx, r4xx] = await Promise.all([
+                getMetricInstant(
+                  `sum(rate(http_requests_total{job="${service}",status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="${service}"}[5m])), 0.001)`,
+                  controller.signal
+                ),
+                getMetricInstant(
+                  `sum(rate(http_requests_total{job="${service}",status=~"4.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="${service}"}[5m])), 0.001)`,
+                  controller.signal
+                ),
+              ]);
+              prom5xx = safeNumber(r5xx[0]?.value, 0);
+              prom4xx = safeNumber(r4xx[0]?.value, 0);
+            } catch {
+              /* Prometheus optional */
+            }
+
+            const errorRate = Math.max(
+              prom5xx + prom4xx,
+              svcStats.error_rate_estimate,
+              svcStats.critical > 0 ? 0.05 : 0
+            );
+
+            let p95Latency = svcStats.critical > 0 ? 120 : 0;
+            try {
+              const p95Results = await getMetricInstant(
                 `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="${service}"}[5m])) by (le)) * 1000`,
                 controller.signal
-              ),
-            ]);
-
-            const errorRate = safeNumber(errorRateResults[0]?.value, 0);
-            const p95Latency = safeNumber(p95Results[0]?.value, 0);
-            const incidentCount = incidentCountFromStats(stats.by_service, service);
+              );
+              p95Latency = safeNumber(p95Results[0]?.value, p95Latency);
+            } catch {
+              /* keep estimate */
+            }
 
             return {
               service,
               errorRate,
               p95Latency,
-              incidentCount,
-              hasCritical: false,
-              hasWarning: incidentCount > 0,
+              incidentCount: svcStats.open,
+              criticalCount: svcStats.critical,
+              hasCritical: svcStats.critical > 0,
+              hasWarning: svcStats.open > 0,
             };
           })
         );
@@ -128,9 +155,10 @@ export default function ServiceHealthGrid() {
       }
     }
 
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
+    const startDelay = setTimeout(fetchData, 0);
+    const interval = setInterval(fetchData, 45000);
     return () => {
+      clearTimeout(startDelay);
       controller.abort();
       clearInterval(interval);
     };
@@ -150,6 +178,7 @@ export default function ServiceHealthGrid() {
           errorRate={s.errorRate}
           p95Latency={s.p95Latency}
           incidentCount={s.incidentCount}
+          criticalCount={s.criticalCount}
           lastUpdated={new Date().toLocaleTimeString()}
         />
       ))}

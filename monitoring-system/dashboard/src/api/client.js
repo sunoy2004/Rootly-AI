@@ -1,20 +1,29 @@
 import axios from 'axios';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8013';
-const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://localhost:8013';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8013';
+const WS_BASE = import.meta.env.VITE_WS_URL || 'ws://127.0.0.1:8013';
 
 const PROMETHEUS_BASE = 'http://localhost:9090';
 const AI_BASE = 'http://localhost:8008';
 
 export const incidentAPI = axios.create({
   baseURL: API_BASE,
-  timeout: 20000,
+  timeout: 10000,
 });
 
 export const prometheusAPI = axios.create({
   baseURL: PROMETHEUS_BASE,
-  timeout: 15000,
+  timeout: 12000,
 });
+
+export async function checkBackendHealth() {
+  try {
+    const res = await incidentAPI.get('/health', { timeout: 4000 });
+    return res.data?.status === 'ok';
+  } catch {
+    return false;
+  }
+}
 
 export const aiAPI = axios.create({
   baseURL: AI_BASE,
@@ -190,9 +199,63 @@ export function connectLiveIncidents({ onIncident, onError }) {
   });
 }
 
+const LOG_SERVICES = ['user-service', 'order-service', 'payment-service'];
+
+async function fetchLogsFallback(params = {}, signal) {
+  const limit = params.limit || 100;
+  const targets =
+    params.service && params.service !== 'all'
+      ? [params.service]
+      : LOG_SERVICES;
+
+  const chunks = await Promise.all(
+    targets.map(async (svc) => {
+      try {
+        const r = await incidentAPI.get(`/services/${svc}/logs`, {
+          params: { ...params, limit: Math.ceil(limit / targets.length) + 20 },
+          signal,
+          timeout: 5000,
+        });
+        return Array.isArray(r.data) ? r.data : [];
+      } catch {
+        return [];
+      }
+    })
+  );
+
+  const merged = chunks.flat();
+  merged.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+  return merged.slice(0, limit);
+}
+
 export async function getLogs(params = {}, signal) {
-  const response = await incidentAPI.get('/logs', { params, signal });
-  return response.data;
+  const useAll = !params.service || params.service === 'all';
+
+  if (!useAll) {
+    try {
+      const response = await incidentAPI.get(`/services/${params.service}/logs`, {
+        params,
+        signal,
+        timeout: 6000,
+      });
+      return Array.isArray(response.data) ? response.data : [];
+    } catch (err) {
+      if (err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  try {
+    const response = await incidentAPI.get('/logs', { params, signal, timeout: 6000 });
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (err) {
+    if (err.response?.status === 404 || err.code === 'ECONNABORTED' || err.message?.includes('timeout')) {
+      return fetchLogsFallback(params, signal);
+    }
+    throw err;
+  }
 }
 
 export async function getServiceLogs(serviceName, params = {}, signal) {

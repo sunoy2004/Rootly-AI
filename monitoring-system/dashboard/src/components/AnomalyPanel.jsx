@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { getAnomalies, connectLiveAnomalies, isRequestAborted } from '../api/client';
+import { getAnomalies, isRequestAborted } from '../api/client';
+import { safeNumber, safeString } from '../utils/safeRender';
 
 function SeverityBadge({ severity }) {
   const color = severity === 'CRITICAL' ? '#ef4444' : '#f59e0b';
@@ -29,33 +30,12 @@ export default function AnomalyPanel() {
         if (!controller.signal.aborted) setLoading(false);
       }
     }
-    fetchAnomalies();
+    const start = setTimeout(fetchAnomalies, 500);
     const interval = setInterval(fetchAnomalies, 60000);
     return () => {
+      clearTimeout(start);
       controller.abort();
       clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
-    let conn;
-    const timer = setTimeout(() => {
-      conn = connectLiveAnomalies({
-      onAnomaly: (anomaly) => {
-        setAnomalies((prev) => {
-          const key = `${anomaly.service}-${anomaly.metric}-${anomaly.timestamp}`;
-          if (prev.some((a) => `${a.service}-${a.metric}-${a.timestamp || a.created_at}` === key)) {
-            return prev;
-          }
-          return [anomaly, ...prev].slice(0, 30);
-        });
-      },
-      onError: () => {},
-    });
-    }, 1000);
-    return () => {
-      clearTimeout(timer);
-      conn?.close();
     };
   }, []);
 
@@ -67,7 +47,7 @@ export default function AnomalyPanel() {
       ) : anomalies.length === 0 ? (
         <div style={{ color: '#8b8fa8' }}>No anomalies detected yet. Run the load simulator.</div>
       ) : (
-        <div style={{ overflowX: 'auto' }}>
+        <div style={{ maxHeight: 300, overflowY: 'auto', overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '1px solid #2a2d3a' }}>
@@ -83,12 +63,12 @@ export default function AnomalyPanel() {
             <tbody>
               {anomalies.map((a, idx) => (
                 <tr key={a.id || `${a.service}-${a.metric}-${idx}`} style={{ borderBottom: '1px solid #1a1d27' }}>
-                  <td style={{ padding: 8, color: '#e8eaf0' }}>{a.service}</td>
-                  <td style={{ padding: 8, color: '#e8eaf0' }}>{a.metric}</td>
-                  <td style={{ padding: 8 }}><SeverityBadge severity={a.severity} /></td>
-                  <td style={{ padding: 8, color: '#e8eaf0' }}>{a.current_value?.toFixed?.(4) ?? a.current_value}</td>
-                  <td style={{ padding: 8, color: '#e8eaf0' }}>{a.z_score?.toFixed?.(2) ?? '-'}</td>
-                  <td style={{ padding: 8, color: '#8b8fa8' }}>{a.detector}</td>
+                  <td style={{ padding: 8, color: '#e8eaf0' }}>{safeString(a.service)}</td>
+                  <td style={{ padding: 8, color: '#e8eaf0' }}>{safeString(a.metric)}</td>
+                  <td style={{ padding: 8 }}><SeverityBadge severity={safeString(a.severity, 'WARNING')} /></td>
+                  <td style={{ padding: 8, color: '#e8eaf0' }}>{safeNumber(a.current_value, 0).toFixed(4)}</td>
+                  <td style={{ padding: 8, color: '#e8eaf0' }}>{safeNumber(a.z_score, 0).toFixed(2)}</td>
+                  <td style={{ padding: 8, color: '#8b8fa8' }}>{safeString(a.detector)}</td>
                   <td style={{ padding: 8, color: '#8b8fa8', fontSize: 12 }}>
                     {a.created_at || a.timestamp
                       ? new Date(a.created_at || a.timestamp).toLocaleTimeString()

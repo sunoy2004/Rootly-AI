@@ -75,9 +75,10 @@ export default function ClusterView() {
       }
     }
 
-    fetchClusters();
+    const start = setTimeout(fetchClusters, 2000);
     const interval = setInterval(fetchClusters, 60000);
     return () => {
+      clearTimeout(start);
       controller.abort();
       clearInterval(interval);
     };

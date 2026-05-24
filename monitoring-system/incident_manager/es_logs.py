@@ -4,6 +4,8 @@ from typing import List, Optional
 
 import httpx
 
+from file_logs import read_file_logs
+
 logger = logging.getLogger(__name__)
 
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
@@ -81,7 +83,7 @@ async def search_logs(
     }
 
     logs = []
-    async with httpx.AsyncClient(timeout=8.0) as client:
+    async with httpx.AsyncClient(timeout=3.0) as client:
         try:
             resp = await client.post(f"{ES_URL}/api-logs-*/_search", json=body)
             resp.raise_for_status()
@@ -91,4 +93,11 @@ async def search_logs(
         except Exception as exc:
             logger.warning(f"Elasticsearch log search failed: {exc}")
 
+    if not logs:
+        logs = read_file_logs(
+            service=service,
+            level=level,
+            search_text=search_text,
+            limit=limit,
+        )
     return logs

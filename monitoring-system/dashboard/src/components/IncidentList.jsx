@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   getIncidents,
   updateIncident,
-  connectLiveIncidents,
   isRequestAborted,
 } from '../api/client';
 
@@ -153,43 +152,14 @@ export default function IncidentList() {
       }
     }
 
-    fetchIncidents();
-    const interval = setInterval(fetchIncidents, 30000);
+    const start = setTimeout(fetchIncidents, 1000);
+    const interval = setInterval(fetchIncidents, 45000);
     return () => {
+      clearTimeout(start);
       controller.abort();
       clearInterval(interval);
     };
   }, [filters, refreshKey]);
-
-  useEffect(() => {
-    let conn;
-    const timer = setTimeout(() => {
-      conn = connectLiveIncidents({
-      onIncident: (incident) => {
-        setIncidents((prev) => {
-          const exists = prev.some((i) => i.id === incident.id);
-          if (exists) {
-            return prev.map((i) => (i.id === incident.id ? { ...i, ...incident } : i));
-          }
-          if (filters.status && incident.status !== filters.status) return prev;
-          if (filters.severity && incident.severity !== filters.severity) return prev;
-          if (
-            filters.service &&
-            !incident.affected_services?.includes(filters.service)
-          ) {
-            return prev;
-          }
-          return [incident, ...prev].slice(0, 50);
-        });
-      },
-      onError: () => {},
-    });
-    }, 1000);
-    return () => {
-      clearTimeout(timer);
-      conn?.close();
-    };
-  }, [filters]);
 
   async function handleAcknowledge(id) {
     try {

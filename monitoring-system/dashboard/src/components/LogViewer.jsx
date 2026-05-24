@@ -52,7 +52,10 @@ export default function LogViewer() {
       list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
       setLogs(list);
     } catch (err) {
-      setError('Failed to load logs. Is incident-manager running on port 8013?');
+      const msg = err.code === 'ECONNABORTED' || err.message?.includes('timeout')
+        ? 'Log request timed out — showing partial results. Try filtering to one service.'
+        : 'Failed to load logs. Is incident-manager running on port 8013?';
+      setError(msg);
       console.error(err);
     } finally {
       setLoading(false);
@@ -60,9 +63,12 @@ export default function LogViewer() {
   }, [selectedService, selectedLevel, searchText, paused]);
 
   useEffect(() => {
-    fetchLogs();
-    const interval = setInterval(fetchLogs, 3000);
-    return () => clearInterval(interval);
+    const start = setTimeout(fetchLogs, 1500);
+    const interval = setInterval(fetchLogs, 5000);
+    return () => {
+      clearTimeout(start);
+      clearInterval(interval);
+    };
   }, [fetchLogs]);
 
   useEffect(() => {
@@ -147,7 +153,7 @@ export default function LogViewer() {
           <div style={{ color: '#8b8fa8' }}>Fetching logs from Elasticsearch...</div>
         ) : displayLogs.length === 0 ? (
           <div style={{ color: '#8b8fa8' }}>
-            No logs in Elasticsearch yet. Rebuild microservices (logger flush fix), run load simulator, wait ~5s for Fluent Bit.
+            No logs found. Run load simulator, wait ~10s for Fluent Bit, then click Refresh. Try a single service filter.
           </div>
         ) : (
           displayLogs.map((log, i) => (

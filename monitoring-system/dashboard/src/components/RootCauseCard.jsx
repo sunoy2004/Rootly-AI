@@ -26,7 +26,19 @@ function parseAnalysis(incident) {
     confidence: raw.confidence ?? base.confidence ?? incident.confidence,
   };
 
-  return { ...merged, ...dedupeLists(merged.debug_steps, merged.recommended_actions) };
+  const deduped = dedupeLists(merged.debug_steps, merged.recommended_actions);
+  let debugSteps = deduped.debug_steps;
+  if (!debugSteps.length) {
+    const svc = (merged.affected_services?.[0] || incident.affected_services?.[0] || 'service');
+    debugSteps = [
+      `Search Elasticsearch for ERROR/WARNING logs on ${svc} (last 30 min)`,
+      `Open Jaeger and inspect traces for ${svc}`,
+      `Check Prometheus metrics: error rate, p95 latency, DB errors`,
+      'Review recent anomalies for matching metric spikes',
+      'Verify load patterns and dependency health',
+    ];
+  }
+  return { ...merged, ...deduped, debug_steps: debugSteps };
 }
 
 function Section({ title, children, accent = '#3b82f6' }) {

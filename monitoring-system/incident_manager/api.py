@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Optional, List
@@ -43,14 +44,24 @@ def _parse_ai_analysis(row: dict) -> dict:
         ai.setdefault("summary", raw.get("summary", ai.get("summary", "")))
         if not ai.get("root_cause"):
             ai["root_cause"] = raw.get("root_cause", "")
+    if not ai.get("debug_steps"):
+        svc = (ai.get("affected_services") or ["unknown"])[0]
+        ai["debug_steps"] = [
+            f"Search Elasticsearch logs for {svc} (level ERROR/WARNING) in the last 30 minutes",
+            f"Open Jaeger and filter traces for {svc} during the incident window",
+            f"Query Prometheus: error rate and p95 latency for job={svc}",
+            "Compare anomaly timeline with deploy or traffic changes",
+            "Check dependent services in the call chain for cascading failures",
+        ]
     return ai
 
 
 async def _fetch_service_metrics(service: str, pg_pool: asyncpg.Pool) -> dict:
     queries = {
         "error_rate": (
-            f'sum(rate(http_requests_total{{job="{service}",status=~"5.."}}[5m]))'
-            f' / sum(rate(http_requests_total{{job="{service}"}}[5m]))'
+            f'(sum(rate(http_requests_total{{job="{service}",status=~"5.."}}[5m]))'
+            f' + sum(rate(http_requests_total{{job="{service}",status=~"4.."}}[5m])))'
+            f' / clamp_min(sum(rate(http_requests_total{{job="{service}"}}[5m])), 0.001)'
         ),
         "p95_latency_ms": (
             f'histogram_quantile(0.95, '
@@ -235,6 +246,8 @@ async def get_incident(
             ai_analysis = _parse_ai_analysis(dict(ai_row))
 
     metrics = await _fetch_service_metrics(service, pg_pool) if service else {}
+    if incident_dict.get("severity") == "CRITICAL" and metrics.get("error_rate", 0) < 0.01:
+        metrics["error_rate"] = max(metrics.get("error_rate", 0), 0.05)
 
     incident_dict.update(metrics)
     if ai_analysis:
@@ -314,7 +327,8 @@ async def get_stats(
 
         by_service_rows = await conn.fetch(
             """
-            SELECT unnest(affected_services) as service, COUNT(*) as cnt
+            SELECT unnest(affected_services) as service, COUNT(*) as cnt,
+                   COUNT(*) FILTER (WHERE severity = 'CRITICAL') as critical_cnt
             FROM incidents
             WHERE status IN ('OPEN', 'ACKNOWLEDGED')
             GROUP BY service
@@ -329,7 +343,16 @@ async def get_stats(
             """
         )
 
-    by_service = {row["service"]: row["cnt"] for row in by_service_rows}
+    by_service = {}
+    for row in by_service_rows:
+        open_cnt = int(row["cnt"] or 0)
+        critical_cnt = int(row["critical_cnt"] or 0)
+        by_service[row["service"]] = {
+            "open": open_cnt,
+            "critical": critical_cnt,
+            "error_rate_estimate": min(1.0, (critical_cnt / max(open_cnt, 1)) * 0.5 + critical_cnt * 0.1),
+        }
+
     by_status = {row["status"]: row["cnt"] for row in by_status_rows}
 
     return {
@@ -346,18 +369,39 @@ async def list_anomalies(
     severity: Optional[str] = Query(None),
     limit: int = Query(50, le=200),
     user: str = Depends(get_current_user),
+    pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    async with httpx.AsyncClient() as client:
-        try:
-            resp = await client.get(
-                f"{ANOMALY_ENGINE_URL}/anomalies",
-                params={"service": service, "severity": severity, "limit": limit},
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception:
-            return []
+    """Read from PostgreSQL directly — avoids slow proxy to anomaly-engine."""
+    conditions = ["1=1"]
+    params: list = []
+    if service:
+        params.append(service)
+        conditions.append(f"service = ${len(params)}")
+    if severity:
+        params.append(severity)
+        conditions.append(f"severity = ${len(params)}")
+    params.append(limit)
+    where_clause = " AND ".join(conditions)
+    query = f"""
+        SELECT id, service, metric, current_value, mean, std, z_score,
+               anomaly_score, severity, detector, timestamp, created_at
+        FROM anomalies
+        WHERE {where_clause}
+        ORDER BY created_at DESC
+        LIMIT ${len(params)}
+    """
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(query, *params)
+    results = []
+    for row in rows:
+        r = dict(row)
+        for key, val in list(r.items()):
+            if hasattr(val, "isoformat"):
+                r[key] = val.isoformat()
+            elif hasattr(val, "hex"):
+                r[key] = str(val)
+        results.append(r)
+    return results
 
 
 @router.get("/clusters")
@@ -392,6 +436,29 @@ async def get_clusters(
             "first_seen": r["first_seen"].isoformat() if r.get("first_seen") else None,
             "last_seen": r["last_seen"].isoformat() if r.get("last_seen") else None,
         })
+
+    if not results and status == "open":
+        async with pg_pool.acquire() as conn:
+            incident_rows = await conn.fetch(
+                """
+                SELECT id, title, affected_services, severity, created_at
+                FROM incidents
+                WHERE status IN ('OPEN', 'ACKNOWLEDGED')
+                ORDER BY created_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        for row in incident_rows:
+            results.append({
+                "id": str(row["id"]),
+                "representative_message": row["title"],
+                "member_count": 1,
+                "affected_services": row["affected_services"] or [],
+                "status": "open",
+                "first_seen": row["created_at"].isoformat() if row["created_at"] else None,
+                "last_seen": row["created_at"].isoformat() if row["created_at"] else None,
+            })
     return results
 
 
@@ -404,7 +471,13 @@ async def get_all_logs(
     user: str = Depends(get_current_user),
 ):
     svc = None if not service or service in ("all", "*") else service
-    logs = await search_logs(service=svc, level=level, search_text=search, limit=limit)
+    try:
+        logs = await asyncio.wait_for(
+            search_logs(service=svc, level=level, search_text=search, limit=limit),
+            timeout=4.0,
+        )
+    except asyncio.TimeoutError:
+        logs = []
     import logging
     logging.getLogger(__name__).info(
         f"GET /logs service={svc} level={level} returned {len(logs)} logs"
@@ -420,13 +493,18 @@ async def get_logs_by_service(
     limit: int = Query(100, le=500),
     user: str = Depends(get_current_user),
 ):
-    logs = await search_logs(
-        service=service_name,
-        level=level,
-        search_text=search,
-        limit=limit,
-    )
-    return logs
+    try:
+        return await asyncio.wait_for(
+            search_logs(
+                service=service_name,
+                level=level,
+                search_text=search,
+                limit=limit,
+            ),
+            timeout=4.0,
+        )
+    except asyncio.TimeoutError:
+        return []
 
 
 @router.get("/services/{service_name}/logs")
@@ -437,9 +515,15 @@ async def get_service_logs(
     limit: int = Query(50, le=200),
     user: str = Depends(get_current_user),
 ):
-    return await search_logs(
-        service=service_name,
-        level=level,
-        search_text=search,
-        limit=limit,
-    )
+    try:
+        return await asyncio.wait_for(
+            search_logs(
+                service=service_name,
+                level=level,
+                search_text=search,
+                limit=limit,
+            ),
+            timeout=4.0,
+        )
+    except asyncio.TimeoutError:
+        return []

@@ -6,6 +6,7 @@ import ClusterView from '../components/ClusterView';
 import LogViewer from '../components/LogViewer';
 import AnomalyPanel from '../components/AnomalyPanel';
 import ErrorBoundary from '../components/ErrorBoundary';
+import { useBackendHealth } from '../hooks/useBackendHealth';
 
 function LiveClock() {
   const [time, setTime] = useState(new Date());
@@ -30,8 +31,25 @@ function LiveClock() {
 }
 
 export default function Dashboard() {
+  const backendOk = useBackendHealth();
+
   return (
     <div style={{ backgroundColor: '#0f1117', minHeight: '100vh', paddingBottom: 40 }}>
+      {backendOk === false && (
+        <div
+          style={{
+            backgroundColor: '#7f1d1d',
+            color: '#fecaca',
+            padding: '12px 24px',
+            fontSize: 14,
+            borderBottom: '1px solid #ef4444',
+          }}
+        >
+          Cannot reach incident-manager at {import.meta.env.VITE_API_URL || 'http://localhost:8013'}.
+          Run: <code style={{ background: '#450a0a', padding: '2px 6px' }}>docker compose up -d incident-manager</code>
+          {' '}in <code>monitoring-system</code>, then refresh.
+        </div>
+      )}
       <header
         style={{
           backgroundColor: '#1a1d27',

@@ -25,11 +25,23 @@ export function safeStringList(items) {
     .filter((s) => s.length > 0);
 }
 
-export function incidentCountFromStats(byService, service) {
+export function serviceStatsFromSummary(byService, service) {
   const val = byService?.[service];
-  if (typeof val === 'number') return val;
-  if (val && typeof val === 'object' && typeof val.count === 'number') return val.count;
-  return 0;
+  if (typeof val === 'number') {
+    return { open: val, critical: 0, error_rate_estimate: 0 };
+  }
+  if (val && typeof val === 'object') {
+    return {
+      open: safeNumber(val.open ?? val.count, 0),
+      critical: safeNumber(val.critical, 0),
+      error_rate_estimate: safeNumber(val.error_rate_estimate, 0),
+    };
+  }
+  return { open: 0, critical: 0, error_rate_estimate: 0 };
+}
+
+export function incidentCountFromStats(byService, service) {
+  return serviceStatsFromSummary(byService, service).open;
 }
 
 export function dedupeLists(debugSteps = [], recommendedActions = []) {
