@@ -199,6 +199,10 @@ services:
     ports:
       - "8004:8004"
     env_file: .env
+    volumes:
+      - ./anomaly_engine:/app
+    environment:
+      - ANOMALY_DETECTION_INTERVAL_SEC=30
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8004/health')\""]
       interval: 30s
@@ -241,6 +245,8 @@ services:
     ports:
       - "8006:8006"
     env_file: .env
+    volumes:
+      - ./clustering_engine:/app
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\""]
       interval: 30s
@@ -289,6 +295,10 @@ services:
     ports:
       - "8008:8008"
     env_file: .env
+    volumes:
+      - ./ai_agent:/app
+    environment:
+      - AI_BATCH_INTERVAL_SEC=20
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8008/health')\""]
       interval: 30s

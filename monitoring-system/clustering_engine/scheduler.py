@@ -40,7 +40,7 @@ class ClusteringScheduler:
         pg_pool = await asyncpg.create_pool(pg_url, min_size=2, max_size=10)
         self.store = ClusterStore(pg_pool)
 
-        self.scheduler.add_job(self.run_clustering, "interval", minutes=2)
+        self.scheduler.add_job(self.run_clustering, "interval", seconds=60)
         await self.run_clustering()
         self.scheduler.start()
         logger.info("Clustering scheduler started")
@@ -55,7 +55,7 @@ class ClusteringScheduler:
             import httpx
             prometheus_url = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
             async with httpx.AsyncClient(timeout=2.0) as client:
-                expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
+                expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)"}[1m]))'
                 resp = await client.get(
                     f"{prometheus_url}/api/v1/query",
                     params={"query": expr}
@@ -66,7 +66,7 @@ class ClusteringScheduler:
                     result = data.get("data", {}).get("result", [])
                     if result:
                         val = float(result[0]["value"][1])
-                        return val > 0.1
+                        return val > 0.02
             return False
         except Exception as e:
             logger.error(f"Error checking if simulator is running: {e}")

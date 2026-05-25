@@ -1,12 +1,14 @@
 import json
 import logging
 import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
 LOG_DIR = os.getenv("LOG_DIR", "/logs")
+LOG_MAX_AGE_MINUTES = int(os.getenv("LOG_MAX_AGE_MINUTES", "30"))
 SERVICE_FILES = {
     "user-service": "user-service.log",
     "order-service": "order-service.log",
@@ -29,6 +31,24 @@ def _normalize_from_file(obj: dict) -> dict:
     }
 
 
+def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
+    if not ts:
+        return None
+    try:
+        if ts.endswith("Z"):
+            ts = ts.replace("Z", "+00:00")
+        return datetime.fromisoformat(ts).astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_recent(entry: dict, max_age: timedelta) -> bool:
+    ts = _parse_ts(entry.get("timestamp"))
+    if not ts:
+        return True
+    return datetime.now(timezone.utc) - ts <= max_age
+
+
 def read_file_logs(
     service: Optional[str] = None,
     level: Optional[str] = None,
@@ -45,6 +65,7 @@ def read_file_logs(
 
     level_up = level.upper() if level else None
     search_lower = search_text.lower() if search_text else None
+    max_age = timedelta(minutes=LOG_MAX_AGE_MINUTES)
     collected: List[dict] = []
 
     for svc, path in targets:
@@ -71,6 +92,8 @@ def read_file_logs(
             if not obj.get("service"):
                 obj["service"] = svc
             entry = _normalize_from_file(obj)
+            if not _is_recent(entry, max_age):
+                continue
             if level_up and entry["level"] != level_up:
                 continue
             if search_lower and search_lower not in (entry.get("message") or "").lower():

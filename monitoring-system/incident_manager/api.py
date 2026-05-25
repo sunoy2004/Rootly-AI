@@ -22,28 +22,35 @@ JAEGER_URL = os.getenv("JAEGER_URL", "http://jaeger:16686")
 ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 
+_simulator_cache: dict = {"running": True, "checked_at": 0.0}
+
 
 async def _is_simulator_running() -> bool:
+    """Cached traffic check — avoids hammering Prometheus on every API call."""
+    import time
+    now = time.monotonic()
+    if now - _simulator_cache["checked_at"] < 20:
+        return _simulator_cache["running"]
     try:
-        import httpx
-        async with httpx.AsyncClient(timeout=2.0) as client:
-            expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)"}[1m]))'
             resp = await client.get(
                 f"{PROMETHEUS_URL}/api/v1/query",
-                params={"query": expr}
+                params={"query": expr},
             )
+            running = False
             if resp.status_code == 200:
                 data = resp.json()
                 if data.get("status") == "success":
                     result = data.get("data", {}).get("result", [])
                     if result:
-                        val = float(result[0]["value"][1])
-                        return val > 0.1
-        return False
+                        running = float(result[0]["value"][1]) > 0.02
+            _simulator_cache["running"] = running
+            _simulator_cache["checked_at"] = now
+            return running
     except Exception:
-        return True  # Fallback to True if Prometheus is down or unreachable
-
-
+        _simulator_cache["checked_at"] = now
+        return _simulator_cache["running"]
 
 def _parse_ai_analysis(row: dict) -> dict:
     ai = dict(row)
@@ -92,20 +99,28 @@ async def _fetch_service_metrics(service: str, pg_pool: asyncpg.Pool) -> dict:
         "gateway_timeouts": f'sum(rate(payment_gateway_timeouts_total{{service="{service}"}}[5m]))',
     }
     metrics = {}
-    async with httpx.AsyncClient(timeout=5.0) as prom:
-        for key, query in queries.items():
-            try:
-                resp = await prom.get(
-                    f"{PROMETHEUS_URL}/api/v1/query",
-                    params={"query": query},
-                )
-                results = resp.json().get("data", {}).get("result", [])
-                if results:
-                    val = float(results[0]["value"][1])
-                    if val == val:  # not NaN
-                        metrics[key] = val
-            except Exception:
-                pass
+
+    async def _query(key: str, query: str, client: httpx.AsyncClient):
+        try:
+            resp = await client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": query},
+                timeout=2.0,
+            )
+            results = resp.json().get("data", {}).get("result", [])
+            if results:
+                val = float(results[0]["value"][1])
+                if val == val:
+                    return key, val
+        except Exception:
+            pass
+        return key, None
+
+    async with httpx.AsyncClient(timeout=2.5) as prom:
+        results = await asyncio.gather(*[_query(k, q, prom) for k, q in queries.items()])
+        for key, val in results:
+            if val is not None:
+                metrics[key] = val
 
     async with pg_pool.acquire() as conn:
         anomaly = await conn.fetchrow(
@@ -153,8 +168,6 @@ async def list_incidents(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    if not await _is_simulator_running():
-        return []
     conditions = ["1=1"]
     params = []
     if status:
@@ -226,31 +239,60 @@ async def get_incident(
 
     service = incident_dict["affected_services"][0] if incident_dict.get("affected_services") else ""
 
-    cluster = None
-    error_logs = []
-    anomalies = []
-
-    async with pg_pool.acquire() as conn:
-        if incident_dict.get("cluster_id"):
-            cluster_row = await conn.fetchrow(
-                "SELECT * FROM failure_clusters WHERE id = $1", incident_dict["cluster_id"]
+    async def _load_db_extras():
+        cluster = None
+        anomalies = []
+        ai_analysis = None
+        async with pg_pool.acquire() as conn:
+            if incident_dict.get("cluster_id"):
+                cluster_row = await conn.fetchrow(
+                    "SELECT * FROM failure_clusters WHERE id = $1", incident_dict["cluster_id"]
+                )
+                if cluster_row:
+                    cluster = dict(cluster_row)
+            anomalies = await conn.fetch(
+                """
+                SELECT * FROM anomalies
+                WHERE service = $1
+                ORDER BY created_at DESC
+                LIMIT 10
+                """,
+                service,
             )
-            if cluster_row:
-                cluster = dict(cluster_row)
+            ai_row = await conn.fetchrow(
+                "SELECT * FROM ai_analyses WHERE incident_id = $1 ORDER BY created_at DESC LIMIT 1",
+                incident_id,
+            )
+            if ai_row:
+                ai_analysis = _parse_ai_analysis(dict(ai_row))
+        return cluster, anomalies, ai_analysis
 
-        anomalies = await conn.fetch(
-            """
-            SELECT * FROM anomalies
-            WHERE service = $1
-            ORDER BY created_at DESC
-            LIMIT 10
-            """,
-            service,
-        )
+    async def _load_logs():
+        try:
+            logs = await asyncio.wait_for(
+                search_logs(service=service, level="ERROR", limit=15),
+                timeout=2.5,
+            )
+            if not logs:
+                logs = await asyncio.wait_for(
+                    search_logs(service=service, limit=15),
+                    timeout=2.0,
+                )
+        except asyncio.TimeoutError:
+            from file_logs import read_file_logs
+            logs = read_file_logs(service=service, limit=15)
+        return logs
 
-    error_logs_raw = await search_logs(service=service, level="ERROR", limit=20)
-    if not error_logs_raw:
-        error_logs_raw = await search_logs(service=service, limit=20)
+    async def _load_metrics():
+        if not service:
+            return {}
+        return await _fetch_service_metrics(service, pg_pool)
+
+    (cluster, anomalies, ai_analysis), error_logs_raw, metrics = await asyncio.gather(
+        _load_db_extras(),
+        _load_logs(),
+        _load_metrics(),
+    )
 
     error_logs = [
         f"[{log.get('level', 'INFO')}] {log.get('endpoint', '')} "
@@ -259,16 +301,6 @@ async def get_incident(
         for log in error_logs_raw
     ]
 
-    ai_analysis = None
-    async with pg_pool.acquire() as conn:
-        ai_row = await conn.fetchrow(
-            "SELECT * FROM ai_analyses WHERE incident_id = $1 ORDER BY created_at DESC LIMIT 1",
-            incident_id,
-        )
-        if ai_row:
-            ai_analysis = _parse_ai_analysis(dict(ai_row))
-
-    metrics = await _fetch_service_metrics(service, pg_pool) if service else {}
     if incident_dict.get("severity") == "CRITICAL" and metrics.get("error_rate", 0) < 0.01:
         metrics["error_rate"] = max(metrics.get("error_rate", 0), 0.05)
 
@@ -340,13 +372,6 @@ async def get_stats(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    if not await _is_simulator_running():
-        return {
-            "total_open": 0,
-            "total_critical": 0,
-            "by_service": {},
-            "by_status": {},
-        }
     async with pg_pool.acquire() as conn:
         total_open = await conn.fetchval(
             "SELECT COUNT(*) FROM incidents WHERE status IN ('OPEN', 'ACKNOWLEDGED')"
@@ -401,8 +426,6 @@ async def list_anomalies(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    if not await _is_simulator_running():
-        return []
     """Read from PostgreSQL directly — avoids slow proxy to anomaly-engine."""
     conditions = ["1=1"]
     params: list = []
@@ -443,8 +466,6 @@ async def get_clusters(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
-    if not await _is_simulator_running():
-        return []
     async with pg_pool.acquire() as conn:
         rows = await conn.fetch(
             """

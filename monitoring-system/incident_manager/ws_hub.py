@@ -62,10 +62,9 @@ async def _logs_loop(websocket: WebSocket, service: str, level: str, search: str
                 )
             except asyncio.TimeoutError:
                 logs = []
-            logger.info(f"emitting websocket log: sending {len(logs)} logs to client")
+            logger.debug(f"emitting websocket log: sending {len(logs)} logs to client")
             await websocket.send_json({"type": "logs", "logs": logs})
-            logger.debug(f"WS /ws/logs sent {len(logs)} logs service={service}")
-            await asyncio.sleep(2)
+            await asyncio.sleep(5)
         except WebSocketDisconnect:
             raise
         except Exception as exc:

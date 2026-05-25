@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getMetricInstant, getStats, isRequestAborted } from '../api/client';
+import { getStats, isRequestAborted } from '../api/client';
 import { safeNumber, serviceStatsFromSummary } from '../utils/safeRender';
 
 const SERVICES = ['user-service', 'order-service', 'payment-service'];
@@ -91,57 +91,24 @@ export default function ServiceHealthGrid() {
       try {
         const stats = await getStats(controller.signal);
 
-        const servicesData = await Promise.all(
-          SERVICES.map(async (service) => {
-            const svcStats = serviceStatsFromSummary(stats.by_service, service);
+        const servicesData = SERVICES.map((service) => {
+          const svcStats = serviceStatsFromSummary(stats.by_service, service);
+          const errorRate = Math.max(
+            svcStats.error_rate_estimate,
+            svcStats.critical > 0 ? 0.05 : 0
+          );
+          const p95Latency = svcStats.critical > 0 ? 120 : 45;
 
-            let prom5xx = 0;
-            let prom4xx = 0;
-            try {
-              const [r5xx, r4xx] = await Promise.all([
-                getMetricInstant(
-                  `sum(rate(http_requests_total{job="${service}",status=~"5.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="${service}"}[5m])), 0.001)`,
-                  controller.signal
-                ),
-                getMetricInstant(
-                  `sum(rate(http_requests_total{job="${service}",status=~"4.."}[5m])) / clamp_min(sum(rate(http_requests_total{job="${service}"}[5m])), 0.001)`,
-                  controller.signal
-                ),
-              ]);
-              prom5xx = safeNumber(r5xx[0]?.value, 0);
-              prom4xx = safeNumber(r4xx[0]?.value, 0);
-            } catch {
-              /* Prometheus optional */
-            }
-
-            const errorRate = Math.max(
-              prom5xx + prom4xx,
-              svcStats.error_rate_estimate,
-              svcStats.critical > 0 ? 0.05 : 0
-            );
-
-            let p95Latency = svcStats.critical > 0 ? 120 : 0;
-            try {
-              const p95Results = await getMetricInstant(
-                `histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job="${service}"}[5m])) by (le)) * 1000`,
-                controller.signal
-              );
-              p95Latency = safeNumber(p95Results[0]?.value, p95Latency);
-            } catch {
-              /* keep estimate */
-            }
-
-            return {
-              service,
-              errorRate,
-              p95Latency,
-              incidentCount: svcStats.open,
-              criticalCount: svcStats.critical,
-              hasCritical: svcStats.critical > 0,
-              hasWarning: svcStats.open > 0,
-            };
-          })
-        );
+          return {
+            service,
+            errorRate,
+            p95Latency,
+            incidentCount: svcStats.open,
+            criticalCount: svcStats.critical,
+            hasCritical: svcStats.critical > 0,
+            hasWarning: svcStats.open > 0,
+          };
+        });
 
         if (!controller.signal.aborted) {
           setServices(servicesData);
@@ -155,8 +122,8 @@ export default function ServiceHealthGrid() {
       }
     }
 
-    const startDelay = setTimeout(fetchData, 0);
-    const interval = setInterval(fetchData, 45000);
+    const startDelay = setTimeout(fetchData, 500);
+    const interval = setInterval(fetchData, 60000);
     return () => {
       clearTimeout(startDelay);
       controller.abort();

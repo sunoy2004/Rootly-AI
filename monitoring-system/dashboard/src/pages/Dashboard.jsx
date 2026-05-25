@@ -76,7 +76,7 @@ export default function Dashboard() {
         </section>
 
         <section style={{ marginBottom: 32 }}>
-          <h2 style={{ color: '#e8eaf0', fontSize: 18, marginBottom: 16 }}>Live Metrics (last 30 minutes)</h2>
+          <h2 style={{ color: '#e8eaf0', fontSize: 18, marginBottom: 16 }}>Live Metrics (last 10 minutes)</h2>
           <div style={{ backgroundColor: '#1a1d27', borderRadius: 12, padding: 16 }}>
             <ErrorBoundary name="MetricsPanel" title="Metrics unavailable">
               <MetricsPanel />

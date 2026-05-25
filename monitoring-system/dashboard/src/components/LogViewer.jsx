@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { connectLiveLogs } from '../api/client';
+import { getLogs } from '../api/client';
 
 const SERVICES = [
-  { value: 'all', label: 'All Services' },
-  { value: 'user-service', label: 'User Service' },
-  { value: 'order-service', label: 'Order Service' },
   { value: 'payment-service', label: 'Payment Service' },
+  { value: 'order-service', label: 'Order Service' },
+  { value: 'user-service', label: 'User Service' },
+  { value: 'all', label: 'All Services' },
 ];
 
 function getLevelColor(level) {
@@ -26,7 +26,7 @@ function getLevelColor(level) {
 }
 
 export default function LogViewer() {
-  const [selectedService, setSelectedService] = useState('all');
+  const [selectedService, setSelectedService] = useState('payment-service');
   const [selectedLevel, setSelectedLevel] = useState('');
   const [searchText, setSearchText] = useState('');
   const [logs, setLogs] = useState([]);
@@ -36,39 +36,44 @@ export default function LogViewer() {
   const [error, setError] = useState(null);
   const logContainerRef = useRef(null);
 
-  useEffect(() => {
+  const fetchLogs = useCallback(async (signal) => {
     if (paused) return;
     setLoading(true);
-
-    const conn = connectLiveLogs({
-      service: selectedService === 'all' ? '' : selectedService,
-      level: selectedLevel,
-      search: searchText,
-      onConnect: () => {
-        setError(null);
-      },
-      onLogs: (newLogs) => {
-        console.log("frontend received log event", newLogs);
-        setLogs(newLogs);
-        setError(null);
-        setLoading(false);
-      },
-      onError: (err) => {
-        console.error("WS logs error:", err);
-        setError("WebSocket connection failed. Retrying...");
-        setLoading(false);
+    setError(null);
+    try {
+      const params = { limit: 100 };
+      if (selectedService && selectedService !== 'all') {
+        params.service = selectedService;
       }
-    });
-
-    return () => {
-      conn.close();
-    };
+      if (selectedLevel) params.level = selectedLevel;
+      if (searchText) params.search = searchText;
+      const data = await getLogs(params, signal);
+      const list = Array.isArray(data) ? data : [];
+      list.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+      setLogs(list);
+    } catch (err) {
+      if (err?.code !== 'ERR_CANCELED' && err?.name !== 'CanceledError') {
+        setError('Failed to load logs. Try a single service filter.');
+      }
+    } finally {
+      setLoading(false);
+    }
   }, [selectedService, selectedLevel, searchText, paused]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const start = setTimeout(() => fetchLogs(controller.signal), 3000);
+    const interval = setInterval(() => fetchLogs(controller.signal), 8000);
+    return () => {
+      clearTimeout(start);
+      clearInterval(interval);
+      controller.abort();
+    };
+  }, [fetchLogs]);
+
+  useEffect(() => {
     if (!autoScroll || paused || !logContainerRef.current) return;
-    const el = logContainerRef.current;
-    el.scrollTop = el.scrollHeight;
+    logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
   }, [logs, autoScroll, paused]);
 
   const displayLogs = logs.filter((log) => {
@@ -82,8 +87,6 @@ export default function LogViewer() {
     }
     return true;
   });
-
-  console.log(`rendering ${displayLogs.length} logs`);
 
   return (
     <div
@@ -132,6 +135,9 @@ export default function LogViewer() {
             <input type="checkbox" checked={paused} onChange={(e) => setPaused(e.target.checked)} style={checkboxStyle} />
             Pause
           </label>
+          <button type="button" onClick={() => fetchLogs()} style={btnStyle}>
+            Refresh
+          </button>
           <button type="button" onClick={() => setLogs([])} style={btnStyle}>
             Clear
           </button>
@@ -145,13 +151,10 @@ export default function LogViewer() {
 
       <div ref={logContainerRef} style={logPanelStyle}>
         {loading && displayLogs.length === 0 ? (
-          <div style={{ color: '#8b8fa8', display: 'flex', alignItems: 'center', gap: 8, padding: 12 }}>
-            <div className="spinner" />
-            <span>Streaming logs from Elasticsearch...</span>
-          </div>
+          <div style={{ color: '#8b8fa8', padding: 12 }}>Loading logs...</div>
         ) : displayLogs.length === 0 ? (
           <div style={{ color: '#8b8fa8', padding: 12 }}>
-            No logs found. Start the load simulator to see live events streaming here.
+            No logs found. Run the load simulator, wait ~10s, then click Refresh.
           </div>
         ) : (
           displayLogs.map((log, i) => (
@@ -165,11 +168,7 @@ export default function LogViewer() {
                 borderBottom: '1px solid rgba(255, 255, 255, 0.03)',
                 fontSize: 12,
                 alignItems: 'start',
-                transition: 'background-color 0.2s',
-                borderRadius: 4,
               }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.02)' }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
             >
               <span style={{ color: '#636d83', fontFamily: 'monospace' }}>
                 {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : '—'}
@@ -179,13 +178,7 @@ export default function LogViewer() {
               <div>
                 {log.endpoint && <span style={{ color: '#98c379', marginRight: 8, fontFamily: 'monospace' }}>{log.endpoint}</span>}
                 {log.status_code > 0 && (
-                  <span
-                    style={{
-                      color: log.status_code >= 400 ? '#ef4444' : '#d19a66',
-                      marginRight: 8,
-                      fontWeight: 600,
-                    }}
-                  >
+                  <span style={{ color: log.status_code >= 400 ? '#ef4444' : '#d19a66', marginRight: 8, fontWeight: 600 }}>
                     {log.status_code}
                   </span>
                 )}
@@ -196,13 +189,7 @@ export default function LogViewer() {
                     href={`http://localhost:16686/trace/${log.trace_id}`}
                     target="_blank"
                     rel="noreferrer"
-                    style={{
-                      color: '#61afef',
-                      marginLeft: 8,
-                      textDecoration: 'none',
-                      borderBottom: '1px dashed #61afef',
-                      fontSize: 11,
-                    }}
+                    style={{ color: '#61afef', marginLeft: 8, textDecoration: 'none', fontSize: 11 }}
                   >
                     trace
                   </a>
@@ -225,7 +212,6 @@ const selectStyle = {
   fontSize: 13,
   outline: 'none',
   cursor: 'pointer',
-  transition: 'border-color 0.2s',
 };
 
 const labelStyle = {
@@ -250,7 +236,6 @@ const btnStyle = {
   cursor: 'pointer',
   fontSize: 12,
   fontWeight: 500,
-  transition: 'background-color 0.2s',
 };
 
 const logPanelStyle = {
@@ -262,5 +247,4 @@ const logPanelStyle = {
   overflowY: 'auto',
   overflowX: 'hidden',
   border: '1px solid rgba(255, 255, 255, 0.05)',
-  boxShadow: 'inset 0 4px 12px 0 rgba(0, 0, 0, 0.5)',
 };

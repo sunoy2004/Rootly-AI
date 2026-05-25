@@ -30,8 +30,8 @@ export default function AnomalyPanel() {
         if (!controller.signal.aborted) setLoading(false);
       }
     }
-    const start = setTimeout(fetchAnomalies, 500);
-    const interval = setInterval(fetchAnomalies, 60000);
+    const start = setTimeout(fetchAnomalies, 1500);
+    const interval = setInterval(fetchAnomalies, 45000);
     return () => {
       clearTimeout(start);
       controller.abort();

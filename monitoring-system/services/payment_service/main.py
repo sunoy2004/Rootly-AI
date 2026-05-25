@@ -48,16 +48,16 @@ async def create_payment(request: PaymentRequest):
     async def simulate_gateway():
         roll = random.random()
 
-        if roll < 0.30:
+        if roll < 0.08:
             import asyncio
-            await asyncio.sleep(random.uniform(5, 10))
+            await asyncio.sleep(random.uniform(3, 6))
             GATEWAY_TIMEOUTS.labels(service="payment-service").inc()
             GATEWAY_RESPONSE_TIME.labels(service="payment-service").observe(
                 time.time() - start
             )
             raise GatewayTimeoutError()
 
-        if roll < 0.40:
+        if roll < 0.13:
             PAYMENT_DECLINES.labels(service="payment-service").inc()
             GATEWAY_RESPONSE_TIME.labels(service="payment-service").observe(
                 time.time() - start

@@ -11,15 +11,33 @@ logger = logging.getLogger(__name__)
 
 class IncidentMemory:
     def __init__(self):
-        self.client = chromadb.HttpClient(
-            host=os.getenv("CHROMA_HOST", "chromadb"),
-            port=int(os.getenv("CHROMA_PORT", "8000")),
-        )
-        self.collection = self.client.get_or_create_collection(
-            name="incident_memory",
-            metadata={"hnsw:space": "cosine"},
-        )
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self._client = None
+        self._collection = None
+        self._model = None
+
+    @property
+    def client(self):
+        if self._client is None:
+            self._client = chromadb.HttpClient(
+                host=os.getenv("CHROMA_HOST", "chromadb"),
+                port=int(os.getenv("CHROMA_PORT", "8000")),
+            )
+        return self._client
+
+    @property
+    def collection(self):
+        if self._collection is None:
+            self._collection = self.client.get_or_create_collection(
+                name="incident_memory",
+                metadata={"hnsw:space": "cosine"},
+            )
+        return self._collection
+
+    @property
+    def model(self):
+        if self._model is None:
+            self._model = SentenceTransformer("all-MiniLM-L6-v2")
+        return self._model
 
     def store(self, incident: dict):
         root_cause = incident.get("root_cause")

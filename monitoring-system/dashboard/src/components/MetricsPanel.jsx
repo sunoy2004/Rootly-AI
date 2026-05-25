@@ -115,6 +115,7 @@ export default function MetricsPanel() {
   const [p95Data, setP95Data] = useState([]);
   const [volumeData, setVolumeData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [rangeMinutes] = useState(10);
 
   useEffect(() => {
     let mounted = true;
@@ -123,20 +124,26 @@ export default function MetricsPanel() {
       try {
         const [errors, p95, volume] = await Promise.all([
           getMetricRange(
-            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"(4xx|5xx|4..|5..)",handler!="/metrics"}[5m])) by (job)) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
+            'sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",status=~"(4xx|5xx|4..|5..)",handler!="/metrics"}[5m])) by (job)',
+            rangeMinutes
           ),
           getMetricRange(
-            '(histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (le, job)) * 1000) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
+            'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (le, job)) * 1000',
+            rangeMinutes
           ),
           getMetricRange(
-            '(sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job)) or (sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job) * 0)'
+            'sum(rate(http_requests_total{job=~"user-service|order-service|payment-service",handler!="/metrics"}[5m])) by (job)',
+            rangeMinutes
           ),
         ]);
 
+        const cutoff = Math.floor(Date.now() / 1000) - rangeMinutes * 60;
+        const trim = (points) => points.filter((p) => p.time >= cutoff);
+
         if (mounted) {
-          setErrorRateData(errors);
-          setP95Data(p95);
-          setVolumeData(volume);
+          setErrorRateData(trim(errors));
+          setP95Data(trim(p95));
+          setVolumeData(trim(volume));
           setLoading(false);
         }
       } catch (err) {
@@ -145,31 +152,32 @@ export default function MetricsPanel() {
       }
     }
 
-    fetchData(); // Fetch immediately
-    const interval = setInterval(fetchData, 5000); // Poll every 5s
+    const start = setTimeout(fetchData, 2000);
+    const interval = setInterval(fetchData, 30000);
 
     return () => {
       mounted = false;
+      clearTimeout(start);
       clearInterval(interval);
     };
-  }, []);
+  }, [rangeMinutes]);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
       <ChartCard 
-        title="Error Rate (errors/sec)" 
+        title="Error Rate (errors/sec) — last 10 min" 
         data={errorRateData} 
         loading={loading} 
         valueFormatter={(val) => `${val.toFixed(2)}/s`}
       />
       <ChartCard 
-        title="Latency p95 (ms)" 
+        title="Latency p95 (ms) — last 10 min" 
         data={p95Data} 
         loading={loading} 
         valueFormatter={(val) => `${val.toFixed(0)} ms`}
       />
       <ChartCard 
-        title="Throughput (req/sec)" 
+        title="Throughput (req/sec) — last 10 min" 
         data={volumeData} 
         loading={loading} 
         valueFormatter={(val) => `${val.toFixed(1)}/s`}

@@ -13,10 +13,14 @@ from zscore_detector import ZScoreDetector
 from isolation_forest_detector import IsolationForestDetector
 
 
+from threshold_detector import detect_thresholds
+
+
 logger = logging.getLogger(__name__)
 
-
 SERVICES = ["user-service", "order-service", "payment-service"]
+TRAFFIC_EXPR = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)"}[1m]))'
+DETECTION_INTERVAL_SEC = int(os.getenv("ANOMALY_DETECTION_INTERVAL_SEC", "30"))
 
 POSTGRES_URL = os.getenv(
     "POSTGRES_URL",
@@ -41,7 +45,7 @@ class AnomalyScheduler:
         self.redis = await aioredis.from_url(REDIS_URL)
 
         await self._train_all_models()
-        self.scheduler.add_job(self.run_detection, "interval", seconds=60)
+        self.scheduler.add_job(self.run_detection, "interval", seconds=DETECTION_INTERVAL_SEC)
         self.scheduler.add_job(self.retrain_models, "interval", hours=24)
         self.scheduler.add_job(self.cleanup_old_anomalies, "interval", hours=1)
         self.scheduler.start()
@@ -60,12 +64,11 @@ class AnomalyScheduler:
 
     async def is_simulator_running(self) -> bool:
         try:
-            expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
-            val = await self.prom_client.query_instant(expr)
-            return val > 0.1
+            val = await self.prom_client.query_instant(TRAFFIC_EXPR)
+            return val > 0.02
         except Exception as e:
             logger.error(f"Error checking if simulator is running: {e}")
-            return True  # Fallback to True if Prometheus is down or unreachable
+            return True
 
     async def run_detection(self):
         if not await self.is_simulator_running():
@@ -75,18 +78,28 @@ class AnomalyScheduler:
         for service in SERVICES:
             try:
                 snapshot = await self.prom_client.get_full_snapshot(service)
+                threshold_events = detect_thresholds(snapshot)
                 zscore_events = self.zscore_detector.detect_all(snapshot)
                 if_event = self.if_detector.detect(snapshot)
 
-                all_events = zscore_events
+                all_events = threshold_events + zscore_events
                 if if_event:
                     all_events.append(if_event)
 
+                seen_metrics = set()
+                deduped_events = []
                 for event in all_events:
+                    key = f"{event.service}:{event.metric}"
+                    if key in seen_metrics:
+                        continue
+                    seen_metrics.add(key)
+                    deduped_events.append(event)
+
+                for event in deduped_events:
                     dedup_key = f"anomaly_dedup:{event.service}:{event.metric}"
                     if await self.redis.get(dedup_key):
                         continue
-                    await self.redis.setex(dedup_key, 600, "1")
+                    await self.redis.setex(dedup_key, 300, "1")
 
                     await self.pg_pool.execute(
                         """

@@ -18,7 +18,7 @@ class ZScoreDetector:
         self.windows[key].append(value)
 
         window = list(self.windows[key])
-        if len(window) < 10:
+        if len(window) < 5:
             return None
 
         mean = statistics.mean(window)
@@ -29,9 +29,9 @@ class ZScoreDetector:
 
         z = (value - mean) / std
 
-        if z > 3:
+        if z > 2.5:
             severity = "CRITICAL"
-        elif z > 2:
+        elif z > 1.5:
             severity = "WARNING"
         else:
             return None

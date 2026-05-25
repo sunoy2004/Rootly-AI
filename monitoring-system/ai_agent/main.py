@@ -112,7 +112,7 @@ async def health():
         "service": "ai-agent",
         "llm_provider": os.getenv("LLM_PROVIDER", "groq"),
         "llm_model": os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        "batch_interval_sec": int(os.getenv("AI_BATCH_INTERVAL_SEC", "30")),
+        "batch_interval_sec": int(os.getenv("AI_BATCH_INTERVAL_SEC", "20")),
         "rate_limit": "5/minute",
     }
 

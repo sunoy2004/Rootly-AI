@@ -35,7 +35,7 @@ async def health():
 @app.get("/orders/{order_id}")
 async def get_order(order_id: str):
     start = time.time()
-    if random.random() < 0.30:
+    if random.random() < 0.05:
         logger.warning(
             "Order not found",
             extra={"endpoint": f"/orders/{order_id}", "status_code": 404, "latency_ms": 0},

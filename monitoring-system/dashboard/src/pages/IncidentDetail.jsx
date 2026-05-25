@@ -136,9 +136,11 @@ export default function IncidentDetail() {
   const [resolutionNotes, setResolutionNotes] = useState('');
 
   useEffect(() => {
+    const controller = new AbortController();
+
     async function fetchIncident() {
       try {
-        const data = await getIncident(id);
+        const data = await getIncident(id, controller.signal);
         const inc = { ...(data.incident || data) };
         if (data.ai_analysis) inc.ai_analysis = data.ai_analysis;
         if (data.metrics) {
@@ -161,6 +163,7 @@ export default function IncidentDetail() {
     }
 
     fetchIncident();
+    return () => controller.abort();
   }, [id]);
 
   async function handleAcknowledge() {

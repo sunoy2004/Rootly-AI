@@ -338,9 +338,10 @@ export default function IncidentList() {
       }
     }
 
-    fetchIncidents();
-    const interval = setInterval(fetchIncidents, 5000);
+    const start = setTimeout(fetchIncidents, 2000);
+    const interval = setInterval(fetchIncidents, 30000);
     return () => {
+      clearTimeout(start);
       controller.abort();
       clearInterval(interval);
     };

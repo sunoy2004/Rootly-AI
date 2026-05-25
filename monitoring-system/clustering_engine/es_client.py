@@ -8,7 +8,10 @@ from models import LogEntry
 
 class ElasticsearchClient:
     def __init__(self, host: str):
-        self.es = AsyncElasticsearch([host])
+        self.es = AsyncElasticsearch(
+            [host],
+            headers={"Accept": "application/vnd.elasticsearch+json; compatible-with=8"},
+        )
 
     async def get_recent_errors(self, minutes: int = 30) -> List[LogEntry]:
         query = {

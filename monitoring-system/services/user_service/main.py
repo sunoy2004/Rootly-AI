@@ -44,7 +44,7 @@ async def get_user(user_id: str):
     ACTIVE_DB_CONNECTIONS.labels(service="user-service").set(random.randint(0, 100))
 
     async def simulate_db():
-        if random.random() < 0.10:
+        if random.random() < 0.03:
             await asyncio.sleep(random.uniform(28, 32))
             DB_ERRORS.labels(service="user-service").inc()
             logger.error(
@@ -86,15 +86,15 @@ async def get_user(user_id: str):
 async def login(request: LoginRequest):
     start = time.time()
 
-    if random.random() < 0.15:
-        await asyncio.sleep(random.uniform(2, 4))
+    if random.random() < 0.10:
+        await asyncio.sleep(random.uniform(1.5, 3))
         latency_ms = (time.time() - start) * 1000
         logger.warning(
             "Slow auth detected",
             extra={"latency_ms": latency_ms, "status_code": 200},
         )
 
-    if random.random() < 0.20:
+    if random.random() < 0.08:
         LOGIN_FAILURES.labels(service="user-service").inc()
         logger.warning(
             "Login failed",

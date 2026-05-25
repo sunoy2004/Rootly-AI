@@ -16,8 +16,8 @@ from context_builder import IncidentContextBuilder
 
 logger = logging.getLogger(__name__)
 
-BATCH_INTERVAL_SEC = int(__import__("os").getenv("AI_BATCH_INTERVAL_SEC", "30"))
-COOLDOWN_TTL_SEC = int(__import__("os").getenv("AI_COOLDOWN_TTL_SEC", "600"))
+BATCH_INTERVAL_SEC = int(__import__("os").getenv("AI_BATCH_INTERVAL_SEC", "20"))
+COOLDOWN_TTL_SEC = int(__import__("os").getenv("AI_COOLDOWN_TTL_SEC", "300"))
 MIN_SEVERITY = {"WARNING", "CRITICAL"}
 
 

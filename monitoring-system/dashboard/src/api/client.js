@@ -12,15 +12,8 @@ export const incidentAPI = axios.create({
 });
 
 export const prometheusAPI = axios.create({
-  baseURL: `${API_BASE}/prometheus`,
-  timeout: 15000,
-});
-
-prometheusAPI.interceptors.request.use((config) => {
-  if (authHeader.Authorization) {
-    config.headers.Authorization = authHeader.Authorization;
-  }
-  return config;
+  baseURL: 'http://127.0.0.1:9090',
+  timeout: 12000,
 });
 
 export async function checkBackendHealth() {
@@ -76,8 +69,8 @@ export async function getIncidents(params = {}, signal) {
   return response.data;
 }
 
-export async function getIncident(id) {
-  const response = await incidentAPI.get(`/incidents/${id}`);
+export async function getIncident(id, signal) {
+  const response = await incidentAPI.get(`/incidents/${id}`, { signal, timeout: 20000 });
   return response.data;
 }
 

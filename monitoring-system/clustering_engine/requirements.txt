@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-elasticsearch[async]
+elasticsearch[async]>=8.0.0,<9
 asyncpg
 redis>=5
 apscheduler
