@@ -58,7 +58,20 @@ class AnomalyScheduler:
         tasks = [self.if_detector.train(svc, self.prom_client) for svc in SERVICES]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def is_simulator_running(self) -> bool:
+        try:
+            expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
+            val = await self.prom_client.query_instant(expr)
+            return val > 0.1
+        except Exception as e:
+            logger.error(f"Error checking if simulator is running: {e}")
+            return True  # Fallback to True if Prometheus is down or unreachable
+
     async def run_detection(self):
+        if not await self.is_simulator_running():
+            logger.info("Traffic generator (load simulator) is not running. Skipping anomaly detection.")
+            return
+
         for service in SERVICES:
             try:
                 snapshot = await self.prom_client.get_full_snapshot(service)

@@ -23,6 +23,28 @@ ES_URL = os.getenv("ES_URL", "http://elasticsearch:9200")
 PROMETHEUS_URL = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 
 
+async def _is_simulator_running() -> bool:
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
+            resp = await client.get(
+                f"{PROMETHEUS_URL}/api/v1/query",
+                params={"query": expr}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("status") == "success":
+                    result = data.get("data", {}).get("result", [])
+                    if result:
+                        val = float(result[0]["value"][1])
+                        return val > 0.1
+        return False
+    except Exception:
+        return True  # Fallback to True if Prometheus is down or unreachable
+
+
+
 def _parse_ai_analysis(row: dict) -> dict:
     ai = dict(row)
     for key, value in list(ai.items()):
@@ -131,6 +153,8 @@ async def list_incidents(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
+    if not await _is_simulator_running():
+        return []
     conditions = ["1=1"]
     params = []
     if status:
@@ -316,6 +340,13 @@ async def get_stats(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
+    if not await _is_simulator_running():
+        return {
+            "total_open": 0,
+            "total_critical": 0,
+            "by_service": {},
+            "by_status": {},
+        }
     async with pg_pool.acquire() as conn:
         total_open = await conn.fetchval(
             "SELECT COUNT(*) FROM incidents WHERE status IN ('OPEN', 'ACKNOWLEDGED')"
@@ -370,6 +401,8 @@ async def list_anomalies(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
+    if not await _is_simulator_running():
+        return []
     """Read from PostgreSQL directly — avoids slow proxy to anomaly-engine."""
     conditions = ["1=1"]
     params: list = []
@@ -410,6 +443,8 @@ async def get_clusters(
     user: str = Depends(get_current_user),
     pg_pool: asyncpg.Pool = Depends(get_pg_pool),
 ):
+    if not await _is_simulator_running():
+        return []
     async with pg_pool.acquire() as conn:
         rows = await conn.fetch(
             """

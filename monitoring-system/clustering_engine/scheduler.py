@@ -50,7 +50,32 @@ class ClusteringScheduler:
         if self.redis:
             await self.redis.close()
 
+    async def is_simulator_running(self) -> bool:
+        try:
+            import httpx
+            prometheus_url = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                expr = 'sum(rate(http_requests_total{job=~"(user-service|order-service|payment-service)",handler!="/metrics"}[1m]))'
+                resp = await client.get(
+                    f"{prometheus_url}/api/v1/query",
+                    params={"query": expr}
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("status") == "success":
+                    result = data.get("data", {}).get("result", [])
+                    if result:
+                        val = float(result[0]["value"][1])
+                        return val > 0.1
+            return False
+        except Exception as e:
+            logger.error(f"Error checking if simulator is running: {e}")
+            return True  # Fallback to True if Prometheus is down or unreachable
+
     async def run_clustering(self):
+        if not await self.is_simulator_running():
+            logger.info("Traffic generator (load simulator) is not running. Skipping log clustering.")
+            return
         try:
             entries = await self.es_client.get_recent_errors(minutes=30)
 
